@@ -6,6 +6,10 @@ import os
 from typing import List
 from dataclasses import dataclass
 from saturn_mousehunter_shared import get_logger
+from saturn_mousehunter_shared.config.service_endpoints import (
+    ServiceEndpointConfig,
+    get_service_config
+)
 
 log = get_logger(__name__)
 
@@ -108,13 +112,27 @@ def get_proxy_pool_config() -> ProxyPoolConfig:
 
 
 def get_app_config() -> AppConfig:
-    """从环境变量获取应用配置"""
+    """从环境变量和服务端点配置获取应用配置"""
+    # 获取环境变量
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+
+    # 获取代理池服务的端点配置
+    try:
+        proxy_pool_config = get_service_config("proxy-pool-service", environment)
+        default_host = proxy_pool_config["host"]
+        default_port = proxy_pool_config["port"]
+        log.info(f"Using service endpoint config for {environment}: {proxy_pool_config}")
+    except Exception as e:
+        log.warning(f"Failed to load service endpoint config: {e}, using defaults")
+        default_host = "0.0.0.0"
+        default_port = 8080
+
     return AppConfig(
         app_name=os.getenv("PROXY_POOL_APP_NAME", "Saturn MouseHunter Proxy Pool Service"),
         version=os.getenv("PROXY_POOL_VERSION", "1.0.0"),
         debug=os.getenv("PROXY_POOL_DEBUG", "false").lower() == "true",
-        host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", "8080")),
+        host=os.getenv("HOST", default_host),
+        port=int(os.getenv("PORT", str(default_port))),
         reload=os.getenv("RELOAD", "false").lower() == "true",
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )

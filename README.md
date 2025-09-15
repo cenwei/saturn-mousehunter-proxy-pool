@@ -46,48 +46,94 @@ src/
 
 ## 🛠️ 快速开始
 
-### 安装依赖
+### 环境要求
 
+- Python 3.8+
+- MySQL 8.0+
+- Redis (可选，用于缓存)
+
+### 安装步骤
+
+1. **克隆项目**
 ```bash
-# 在项目根目录
-cd /home/cenwei/workspace/saturn_mousehunter
-uv install
-
-# 或在微服务目录
+git clone <repository-url>
 cd saturn-mousehunter-proxy-pool
-uv install
 ```
 
-### 启动服务
+2. **安装依赖**
+```bash
+pip install -r requirements.txt
+# 或使用 uv (推荐)
+uv pip install -r pyproject.toml
+```
+
+3. **配置数据库**
+```bash
+# 编辑数据库连接配置
+export DB_HOST=localhost
+export DB_PORT=3306
+export DB_USER=your_username
+export DB_PASSWORD=your_password
+export DB_NAME=saturn_mousehunter
+```
+
+4. **初始化数据库**
+```bash
+python scripts/init_database.py
+```
+
+5. **启动服务**
+
+服务现在使用 saturn-mousehunter-shared 中的统一端点配置：
 
 ```bash
-# 方式1：使用入口脚本
-python src/main.py
+# 使用启动脚本（推荐）
+./start.sh
 
-# 方式2：使用uvicorn
-uvicorn main:app --host 0.0.0.0 --port 8080 --app-dir src
+# 开发环境 (默认)
+ENVIRONMENT=development MARKETS=hk ./start.sh
 
-# 方式3：使用项目脚本
-saturn-mousehunter-proxy-pool
+# 启动多个市场
+ENVIRONMENT=development MARKETS=cn,hk,us ./start.sh
+
+# 手动启动
+ENVIRONMENT=development MARKETS=cn,hk,us python src/main.py
 ```
+
+6. **访问管理界面**
+
+根据环境不同：
+- **开发环境**: http://192.168.8.168:8005
+- **测试环境**: http://test-proxy-pool:8005
+- **生产环境**: http://proxy-pool.saturn-mousehunter.internal:8005
+
+### 🔧 配置说明
+
+服务端点配置来自 `saturn-mousehunter-shared/config/service_endpoints.py`：
+
+| 环境 | 主机 | 端口 | 完整地址 |
+|------|------|------|----------|
+| 开发环境 | 192.168.8.168 | 8005 | http://192.168.8.168:8005 |
+| 测试环境 | test-proxy-pool | 8005 | http://test-proxy-pool:8005 |
+| 生产环境 | proxy-pool.saturn-mousehunter.internal | 8005 | http://proxy-pool.saturn-mousehunter.internal:8005 |
+
+**环境变量**：
+- `ENVIRONMENT`: 运行环境 (development/testing/production)
+- `MARKETS`: 启动的市场 (cn,hk,us)
+- `HOST`: 覆盖配置中的主机地址
+- `PORT`: 覆盖配置中的端口
 
 ### 环境变量配置
 
 ```bash
 # 基础配置
-export MARKET=hk                    # 市场代码
-export MODE=live                    # 运行模式
-export AUTO_RUN=true               # 自动启动
-export PORT=8080                   # 服务端口
-
-# 代理池配置
-export POOL_TYPE=memory_ab         # 池类型
-export TARGET_SIZE=20              # 目标池大小
-export ROTATE_INTERVAL_SEC=180     # 轮换间隔
-export LOW_WATERMARK=5             # 低水位线
-
-# 日志配置
+export ENVIRONMENT=development      # 运行环境
+export MARKETS=cn,hk,us            # 启动的市场
 export LOG_LEVEL=INFO              # 日志级别
+
+# 可选配置（会覆盖shared配置）
+export HOST=192.168.8.168          # 服务主机
+export PORT=8005                   # 服务端口
 ```
 
 ## 🔧 API接口

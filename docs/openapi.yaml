@@ -1,0 +1,823 @@
+openapi: 3.0.3
+info:
+  title: Saturn MouseHunter 代理池服务 API
+  description: |
+    Saturn MouseHunter 代理池轮换微服务的完整 API 规范。
+
+    支持多市场（CN/HK/US）代理池管理，包括自动调度、智能轮换和全面监控。
+
+    ## 核心功能
+    - 🌍 多市场支持: CN/HK/US三个市场
+    - 🔄 智能轮换: A/B双池7分钟自动轮换
+    - ⏰ 自动调度: 盘前2分钟启动，盘后自动停止
+    - 📊 监控告警: 实时健康检查和多级别告警
+
+    ## 使用流程
+    1. 调用 `/api/v1/rpc` 获取代理地址
+    2. 使用代理进行数据请求
+    3. 如果代理失败，调用 `/api/v1/rpc` 报告失败
+    4. 定期检查服务状态确保服务正常
+
+  version: 1.0.0
+  contact:
+    name: Saturn MouseHunter Team
+    email: support@saturn.com
+  license:
+    name: MIT
+
+servers:
+  - url: http://192.168.8.168:8005
+    description: 开发环境
+  - url: http://proxy-pool-test.saturn.com:8005
+    description: 测试环境
+  - url: http://proxy-pool.saturn.com:8005
+    description: 生产环境
+
+tags:
+  - name: RPC
+    description: RPC风格的核心代理池接口
+  - name: Pool Management
+    description: 代理池管理和状态查询
+  - name: Configuration
+    description: 配置管理
+  - name: Monitoring
+    description: 监控和告警
+  - name: Scheduler
+    description: 调度管理
+
+paths:
+  /api/v1/rpc:
+    post:
+      tags: [RPC]
+      summary: RPC接口 - 核心代理池操作
+      description: |
+        统一的RPC接口，支持以下操作：
+        - `get_proxy`: 获取可用代理（最常用）
+        - `report_failure`: 报告代理失败（必须调用）
+        - `ping`: 健康检查
+        - `get_status`: 获取状态
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RpcRequest'
+            examples:
+              get_proxy:
+                summary: 获取代理
+                value:
+                  event: "get_proxy"
+                  market: "hk"
+                  mode: "live"
+                  proxy_type: "short"
+              report_failure:
+                summary: 报告失败
+                value:
+                  event: "report_failure"
+                  market: "hk"
+                  mode: "live"
+                  proxy_addr: "192.168.1.100:8005"
+              ping:
+                summary: 健康检查
+                value:
+                  event: "ping"
+                  market: "hk"
+                  mode: "live"
+      responses:
+        '200':
+          description: 操作成功
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ProxyResponse'
+                  - $ref: '#/components/schemas/FailureResponse'
+                  - $ref: '#/components/schemas/PingResponse'
+                  - $ref: '#/components/schemas/StatusRpcResponse'
+              examples:
+                proxy_success:
+                  summary: 获取代理成功
+                  value:
+                    status: "ok"
+                    proxy: "192.168.1.100:8005"
+                failure_reported:
+                  summary: 失败报告成功
+                  value:
+                    status: "ok"
+                    message: "192.168.1.100:8005 marked as failure"
+                ping_success:
+                  summary: 健康检查成功
+                  value:
+                    status: "ok"
+                    message: "pong"
+                    market: "hk"
+                    mode: "live"
+                    running: true
+                    market_status: "market_open"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 代理池不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/pools:
+    get:
+      tags: [Pool Management]
+      summary: 获取所有代理池状态
+      description: 返回所有市场和模式的代理池状态信息
+      responses:
+        '200':
+          description: 成功获取代理池列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolsResponse'
+
+  /api/v1/status:
+    get:
+      tags: [Pool Management]
+      summary: 获取特定代理池状态
+      description: 获取指定市场和模式的代理池详细状态
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+          description: 市场代码
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+          description: 运行模式
+      responses:
+        '200':
+          description: 成功获取状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /api/v1/metrics:
+    get:
+      tags: [Pool Management]
+      summary: 获取代理池指标
+      description: 获取指定代理池的性能指标数据
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+      responses:
+        '200':
+          description: 成功获取指标
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+  /api/v1/start:
+    post:
+      tags: [Pool Management]
+      summary: 启动代理池
+      description: 手动启动指定市场的代理池服务
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+      responses:
+        '200':
+          description: 启动成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResponse'
+
+  /api/v1/stop:
+    post:
+      tags: [Pool Management]
+      summary: 停止代理池
+      description: 手动停止指定市场的代理池服务
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+      responses:
+        '200':
+          description: 停止成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResponse'
+
+  /api/v1/config:
+    get:
+      tags: [Configuration]
+      summary: 获取配置
+      description: 获取指定代理池的配置信息
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+      responses:
+        '200':
+          description: 配置获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+
+    post:
+      tags: [Configuration]
+      summary: 更新配置
+      description: 更新指定代理池的配置参数
+      parameters:
+        - name: market
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cn, hk, us]
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [live, backfill]
+            default: live
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigUpdateRequest'
+      responses:
+        '200':
+          description: 配置更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigUpdateResponse'
+
+  /api/v1/monitoring/alerts:
+    get:
+      tags: [Monitoring]
+      summary: 获取告警列表
+      description: 获取系统告警信息，支持时间和级别过滤
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: 获取多少小时内的告警
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [info, warning, error, critical]
+          description: 告警级别过滤
+        - name: market
+          in: query
+          schema:
+            type: string
+            enum: [cn, hk, us]
+          description: 市场过滤
+      responses:
+        '200':
+          description: 成功获取告警列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsResponse'
+
+  /api/v1/monitoring/summary:
+    get:
+      tags: [Monitoring]
+      summary: 获取监控摘要
+      description: 获取系统监控和告警的摘要信息
+      responses:
+        '200':
+          description: 成功获取监控摘要
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoringSummaryResponse'
+
+  /api/v1/scheduler/status:
+    get:
+      tags: [Scheduler]
+      summary: 获取调度器状态
+      description: 获取全局调度器的运行状态和各市场调度信息
+      responses:
+        '200':
+          description: 成功获取调度器状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerStatusResponse'
+
+  /health:
+    get:
+      tags: [System]
+      summary: 系统健康检查
+      description: 检查系统整体健康状态
+      responses:
+        '200':
+          description: 系统健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    # RPC 请求/响应模型
+    RpcRequest:
+      type: object
+      required: [event]
+      properties:
+        event:
+          type: string
+          enum: [get_proxy, report_failure, ping, get_status]
+          description: 操作类型
+        market:
+          type: string
+          enum: [cn, hk, us]
+          default: hk
+          description: 市场代码
+        mode:
+          type: string
+          enum: [live, backfill]
+          default: live
+          description: 运行模式
+        proxy_type:
+          type: string
+          default: short
+          description: 代理类型（用于get_proxy）
+        proxy_addr:
+          type: string
+          description: 代理地址（用于report_failure）
+
+    ProxyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        proxy:
+          type: string
+          nullable: true
+          description: 代理地址，格式为 IP:PORT
+
+    FailureResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        message:
+          type: string
+
+    PingResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        message:
+          type: string
+        market:
+          type: string
+        mode:
+          type: string
+        running:
+          type: boolean
+        market_status:
+          type: string
+          enum: [market_open, market_closed, pre_market, after_market]
+
+    StatusRpcResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        stats:
+          $ref: '#/components/schemas/PoolStats'
+        market_status:
+          type: string
+        service_mode:
+          type: string
+
+    # 代理池状态模型
+    PoolsResponse:
+      type: object
+      properties:
+        pools:
+          type: array
+          items:
+            $ref: '#/components/schemas/PoolInfo'
+
+    PoolInfo:
+      type: object
+      properties:
+        key:
+          type: string
+          description: 代理池标识，如 "hk_live"
+        market:
+          type: string
+          enum: [cn, hk, us]
+        mode:
+          type: string
+          enum: [live, backfill]
+        running:
+          type: boolean
+        status:
+          type: object
+          properties:
+            stats:
+              $ref: '#/components/schemas/PoolStats'
+            market_status:
+              type: string
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        running:
+          type: boolean
+        market:
+          type: string
+        mode:
+          type: string
+        market_status:
+          type: string
+          enum: [market_open, market_closed, pre_market, after_market]
+        stats:
+          $ref: '#/components/schemas/PoolStats'
+
+    PoolStats:
+      type: object
+      properties:
+        total_pool_size:
+          type: integer
+          description: 总代理数量
+        success_rate:
+          type: number
+          format: float
+          description: 成功率百分比 (0-100)
+        active_pool:
+          type: string
+          enum: [A, B]
+          description: 当前活跃池
+        active_pool_size:
+          type: integer
+          description: 活跃池大小
+        standby_pool_size:
+          type: integer
+          description: 备用池大小
+        total_requests:
+          type: integer
+          format: int64
+          description: 总请求数
+        success_count:
+          type: integer
+          format: int64
+          description: 成功次数
+        failure_count:
+          type: integer
+          format: int64
+          description: 失败次数
+
+    MetricsResponse:
+      type: object
+      properties:
+        running:
+          type: integer
+          enum: [0, 1]
+          description: 运行状态 (0=停止, 1=运行)
+        active_pool:
+          type: string
+          enum: [A, B]
+          nullable: true
+        size_active:
+          type: integer
+        size_standby:
+          type: integer
+        total_pool_size:
+          type: integer
+        success_rate:
+          type: number
+          format: float
+        total_requests:
+          type: integer
+          format: int64
+        success_count:
+          type: integer
+          format: int64
+        failure_count:
+          type: integer
+          format: int64
+
+    # 配置模型
+    ConfigResponse:
+      type: object
+      properties:
+        market:
+          type: string
+        mode:
+          type: string
+        config:
+          $ref: '#/components/schemas/ProxyPoolConfig'
+        backend:
+          type: string
+          default: database_driven
+
+    ProxyPoolConfig:
+      type: object
+      properties:
+        hailiang_api_url:
+          type: string
+          description: 海量代理API地址
+        hailiang_enabled:
+          type: boolean
+          default: true
+        batch_size:
+          type: integer
+          default: 400
+          description: 每次获取的代理数量
+        proxy_lifetime_minutes:
+          type: integer
+          default: 10
+          description: 代理生命周期（分钟）
+        rotation_interval_minutes:
+          type: integer
+          default: 7
+          description: 轮换间隔（分钟）
+        low_watermark:
+          type: integer
+          default: 50
+          description: 低水位线
+        target_size:
+          type: integer
+          default: 200
+          description: 目标池大小
+        auto_start_enabled:
+          type: boolean
+          default: true
+          description: 自动启动开关
+        pre_market_start_minutes:
+          type: integer
+          default: 2
+          description: 盘前启动时间（分钟）
+        post_market_stop_minutes:
+          type: integer
+          default: 30
+          description: 盘后停止时间（分钟）
+
+    ConfigUpdateRequest:
+      type: object
+      properties:
+        hailiang_api_url:
+          type: string
+        hailiang_enabled:
+          type: boolean
+        batch_size:
+          type: integer
+        proxy_lifetime_minutes:
+          type: integer
+        rotation_interval_minutes:
+          type: integer
+        low_watermark:
+          type: integer
+        target_size:
+          type: integer
+        auto_start_enabled:
+          type: boolean
+        pre_market_start_minutes:
+          type: integer
+        post_market_stop_minutes:
+          type: integer
+
+    ConfigUpdateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        message:
+          type: string
+        config:
+          $ref: '#/components/schemas/ProxyPoolConfig'
+
+    # 监控模型
+    AlertsResponse:
+      type: object
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        total:
+          type: integer
+        filters:
+          type: object
+          properties:
+            hours:
+              type: integer
+            level:
+              type: string
+            market:
+              type: string
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+        level:
+          type: string
+          enum: [info, warning, error, critical]
+        title:
+          type: string
+        message:
+          type: string
+        market:
+          type: string
+          nullable: true
+        component:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        acknowledged:
+          type: boolean
+
+    MonitoringSummaryResponse:
+      type: object
+      properties:
+        alerts:
+          type: object
+          properties:
+            total_alerts:
+              type: integer
+            last_24h:
+              $ref: '#/components/schemas/AlertSummary'
+            last_1h:
+              $ref: '#/components/schemas/AlertSummary'
+        health:
+          type: object
+          properties:
+            thresholds:
+              type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    AlertSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        critical:
+          type: integer
+        error:
+          type: integer
+        warning:
+          type: integer
+        info:
+          type: integer
+
+    # 调度器模型
+    SchedulerStatusResponse:
+      type: object
+      properties:
+        scheduler_running:
+          type: boolean
+        markets:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MarketSchedule'
+
+    MarketSchedule:
+      type: object
+      properties:
+        next_start_time:
+          type: string
+          format: date-time
+        next_stop_time:
+          type: string
+          format: date-time
+        is_trading_day:
+          type: boolean
+        current_status:
+          type: string
+          enum: [running, stopped]
+
+    # 通用模型
+    OperationResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [started, stopped, success, error]
+        message:
+          type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, partial, unhealthy]
+        service:
+          type: string
+        version:
+          type: string
+        proxy_pools:
+          type: object
+          additionalProperties:
+            type: boolean
+        total_pools:
+          type: integer
+        running_pools:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+        timestamp:
+          type: string
+          format: date-time

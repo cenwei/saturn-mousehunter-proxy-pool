@@ -39,6 +39,11 @@ async def lifespan(app: FastAPI):
 
     # 启动阶段
     log.info(f"启动代理池服务 - {app_config.app_name} v{app_config.version}")
+    log.info(f"服务配置 - Host: {app_config.host}, Port: {app_config.port}")
+
+    # 获取环境信息
+    environment = os.getenv("ENVIRONMENT", "development")
+    log.info(f"运行环境: {environment}")
 
     # 初始化监控系统
     alert_manager = AlertManager()
