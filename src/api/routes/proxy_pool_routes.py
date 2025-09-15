@@ -5,6 +5,7 @@ API层 - 代理池路由
 from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
+from datetime import datetime
 
 from saturn_mousehunter_shared import get_logger
 from infrastructure.proxy_pool import ProxyPoolManager
@@ -71,6 +72,194 @@ def get_all_managers() -> dict[str, ProxyPoolManager]:
     """获取所有管理器依赖"""
     from main import get_all_proxy_pool_managers
     return get_all_proxy_pool_managers()
+
+
+def get_global_scheduler():
+    """获取全局调度器依赖"""
+    from main import global_scheduler
+    return global_scheduler
+
+
+def get_alert_manager():
+    """获取告警管理器依赖"""
+    from main import alert_manager
+    return alert_manager
+
+
+def get_health_monitor():
+    """获取健康监控器依赖"""
+    from main import health_monitor
+    return health_monitor
+
+
+# ========== 监控告警接口 ==========
+
+@router.get("/monitoring/alerts")
+async def get_alerts(
+    hours: int = Query(24, description="获取多少小时内的告警"),
+    level: str = Query(None, description="告警级别过滤"),
+    market: str = Query(None, description="市场过滤"),
+    alert_manager=Depends(get_alert_manager)
+):
+    """获取告警列表"""
+    if not alert_manager:
+        raise HTTPException(status_code=503, detail="Alert manager not available")
+
+    try:
+        from infrastructure.monitoring import AlertLevel
+
+        # 过滤级别
+        alert_level = None
+        if level:
+            try:
+                alert_level = AlertLevel(level.lower())
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid alert level: {level}")
+
+        if market:
+            alerts = alert_manager.get_alerts_by_market(market.lower(), hours)
+            if alert_level:
+                alerts = [a for a in alerts if a.level == alert_level]
+        else:
+            alerts = alert_manager.get_recent_alerts(hours, alert_level)
+
+        # 转换为字典格式
+        alert_list = []
+        for alert in alerts:
+            alert_list.append({
+                "id": alert.id,
+                "level": alert.level.value,
+                "title": alert.title,
+                "message": alert.message,
+                "market": alert.market,
+                "component": alert.component,
+                "timestamp": alert.timestamp.isoformat(),
+                "acknowledged": alert.acknowledged
+            })
+
+        return {
+            "alerts": alert_list,
+            "total": len(alert_list),
+            "filters": {
+                "hours": hours,
+                "level": level,
+                "market": market
+            }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get alerts: {str(e)}")
+
+
+@router.get("/monitoring/summary")
+async def get_monitoring_summary(
+    alert_manager=Depends(get_alert_manager),
+    health_monitor=Depends(get_health_monitor)
+):
+    """获取监控摘要"""
+    if not alert_manager or not health_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring system not available")
+
+    try:
+        alert_summary = alert_manager.get_alert_summary()
+        health_summary = health_monitor.get_health_summary()
+
+        return {
+            "alerts": alert_summary,
+            "health": health_summary,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get monitoring summary: {str(e)}")
+
+
+@router.post("/monitoring/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(
+    alert_id: str,
+    alert_manager=Depends(get_alert_manager)
+):
+    """确认告警"""
+    if not alert_manager:
+        raise HTTPException(status_code=503, detail="Alert manager not available")
+
+    try:
+        success = alert_manager.acknowledge_alert(alert_id)
+        if success:
+            return {"status": "acknowledged", "alert_id": alert_id}
+        else:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to acknowledge alert: {str(e)}")
+
+
+@router.delete("/monitoring/alerts/clear")
+async def clear_old_alerts(
+    days: int = Query(7, description="清理多少天前的告警"),
+    alert_manager=Depends(get_alert_manager)
+):
+    """清理旧告警"""
+    if not alert_manager:
+        raise HTTPException(status_code=503, detail="Alert manager not available")
+
+    try:
+        cleared_count = alert_manager.clear_old_alerts(days)
+        return {
+            "status": "cleared",
+            "cleared_count": cleared_count,
+            "days": days
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear alerts: {str(e)}")
+
+
+# ========== 调度管理接口 ==========
+
+@router.get("/scheduler/status")
+async def get_scheduler_status(scheduler=Depends(get_global_scheduler)):
+    """获取调度器状态"""
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Global scheduler not available")
+
+    try:
+        status = await scheduler.get_schedule_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get scheduler status: {str(e)}")
+
+
+@router.post("/scheduler/force-start/{market}")
+async def force_start_market(
+    market: str,
+    scheduler=Depends(get_global_scheduler)
+):
+    """强制启动市场"""
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Global scheduler not available")
+
+    try:
+        result = await scheduler.force_start_market(market.lower())
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to force start market: {str(e)}")
+
+
+@router.post("/scheduler/force-stop/{market}")
+async def force_stop_market(
+    market: str,
+    scheduler=Depends(get_global_scheduler)
+):
+    """强制停止市场"""
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Global scheduler not available")
+
+    try:
+        result = await scheduler.force_stop_market(market.lower())
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to force stop market: {str(e)}")
 
 
 # ========== 服务管理接口 ==========

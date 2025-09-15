@@ -4,9 +4,14 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from saturn_mousehunter_shared import get_logger
+from typing import Optional
 from infrastructure.config import get_app_config
 from infrastructure.proxy_pool import ProxyPoolManager
+from infrastructure.global_scheduler import GlobalScheduler
+from infrastructure.monitoring import AlertManager, HealthMonitor
 from domain.config_entities import ProxyPoolMode
 from api.routes import proxy_pool_routes
 import os
@@ -19,14 +24,31 @@ app_config = get_app_config()
 # 全局代理池管理器字典
 proxy_pool_managers: dict[str, ProxyPoolManager] = {}
 
+# 全局调度器
+global_scheduler: Optional[GlobalScheduler] = None
+
+# 监控系统
+alert_manager: Optional[AlertManager] = None
+health_monitor: Optional[HealthMonitor] = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global proxy_pool_managers
+    global proxy_pool_managers, global_scheduler, alert_manager, health_monitor
 
     # 启动阶段
     log.info(f"启动代理池服务 - {app_config.app_name} v{app_config.version}")
+
+    # 初始化监控系统
+    alert_manager = AlertManager()
+    health_monitor = HealthMonitor(alert_manager)
+
+    alert_manager.alert_info(
+        "Service Starting",
+        f"{app_config.app_name} v{app_config.version} is starting up",
+        component="SYSTEM"
+    )
 
     # 从环境变量获取要启动的市场
     markets = os.getenv("MARKETS", "hk").split(",")
@@ -42,13 +64,24 @@ async def lifespan(app: FastAPI):
         backfill_manager = ProxyPoolManager(market, ProxyPoolMode.BACKFILL)
         proxy_pool_managers[f"{market}_backfill"] = backfill_manager
 
-        # 如果配置为自动启动，则启动live模式
-        if app_config.proxy_pool.auto_start:
-            try:
-                await live_manager.start()
-                log.info(f"Auto-started live proxy pool for market {market}")
-            except Exception as e:
-                log.error(f"Failed to auto-start proxy pool for {market}: {e}")
+        log.info(f"Created proxy pool managers for market {market}")
+
+        alert_manager.alert_info(
+            "Market Initialized",
+            f"Proxy pool managers created for market {market.upper()}",
+            market.upper(),
+            "INITIALIZATION"
+        )
+
+    # 启动全局调度器
+    global_scheduler = GlobalScheduler(get_proxy_pool_manager)
+    await global_scheduler.start()
+
+    alert_manager.alert_info(
+        "Scheduler Started",
+        "Global scheduler started successfully",
+        component="SCHEDULER"
+    )
 
     log.info(f"代理池服务已启动 - {app_config.app_name} v{app_config.version}")
 
@@ -56,6 +89,18 @@ async def lifespan(app: FastAPI):
 
     # 关闭阶段
     log.info("正在关闭代理池服务...")
+
+    alert_manager.alert_info(
+        "Service Stopping",
+        "代理池服务正在关闭",
+        component="SYSTEM"
+    )
+
+    # 停止全局调度器
+    if global_scheduler:
+        await global_scheduler.stop()
+
+    # 停止所有管理器
     for key, manager in proxy_pool_managers.items():
         if manager.is_running:
             try:
@@ -63,8 +108,21 @@ async def lifespan(app: FastAPI):
                 log.info(f"Stopped proxy pool manager: {key}")
             except Exception as e:
                 log.error(f"Error stopping manager {key}: {e}")
+                if alert_manager:
+                    alert_manager.alert_error(
+                        "Manager Stop Failed",
+                        f"Failed to stop manager {key}: {str(e)}",
+                        component="SHUTDOWN"
+                    )
 
     proxy_pool_managers.clear()
+
+    alert_manager.alert_info(
+        "Service Stopped",
+        "代理池服务已关闭",
+        component="SYSTEM"
+    )
+
     log.info("代理池服务已关闭")
 
 
@@ -85,6 +143,15 @@ app.add_middleware(
     allow_methods=app_config.cors.allow_methods,
     allow_headers=app_config.cors.allow_headers,
 )
+
+# 挂载静态文件
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/")
+async def admin_interface():
+    """管理界面"""
+    return FileResponse("static/admin.html")
 
 
 @app.get("/health")

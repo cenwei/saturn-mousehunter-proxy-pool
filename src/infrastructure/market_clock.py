@@ -169,8 +169,8 @@ class MarketClockService(IMarketClock):
             self.logger.error(f"Error calculating post-market stop time: {e}")
             return None
 
-    def should_start_trading_session(self, market: str, pre_minutes: int = 30) -> bool:
-        """判断是否应该开始交易时段"""
+    def should_start_trading_session(self, market: str, pre_minutes: int = 2) -> bool:
+        """判断是否应该开始交易时段（默认盘前2分钟）"""
         now = self.market_now(market)
 
         if not self.is_trading_day(market, now):
@@ -208,6 +208,44 @@ class MarketClockService(IMarketClock):
             now_time = now.strftime("%H:%M")
             post_time = post_stop.strftime("%H:%M")
             return now_time >= post_time
+
+    def get_next_trading_start_time(self, market: str, pre_minutes: int = 2) -> Optional[datetime]:
+        """获取下一个交易日的启动时间"""
+        now = self.market_now(market)
+        current_date = now.date()
+
+        # 如果今天是交易日且还没到启动时间，返回今天的启动时间
+        if self.is_trading_day(market, now):
+            today_start = self.get_pre_market_start_time(market, pre_minutes, now)
+            if today_start and now < today_start:
+                return today_start
+
+        # 否则查找下一个交易日
+        for days_ahead in range(1, 8):  # 最多查找一周
+            future_date = current_date + timedelta(days=days_ahead)
+            future_datetime = datetime.combine(future_date, now.time())
+
+            if self.is_trading_day(market, future_datetime):
+                return self.get_pre_market_start_time(market, pre_minutes, future_datetime)
+
+        return None
+
+    def time_until_next_trading_session(self, market: str, pre_minutes: int = 2) -> Optional[timedelta]:
+        """计算距离下一个交易时段的时间"""
+        now = self.market_now(market)
+        next_start = self.get_next_trading_start_time(market, pre_minutes)
+
+        if next_start:
+            # 移除时区信息进行计算
+            if hasattr(now, 'tzinfo') and hasattr(next_start, 'tzinfo'):
+                return next_start - now
+            else:
+                # 简化计算
+                now_naive = now.replace(tzinfo=None) if hasattr(now, 'tzinfo') else now
+                next_naive = next_start.replace(tzinfo=None) if hasattr(next_start, 'tzinfo') else next_start
+                return next_naive - now_naive
+
+        return None
 
     def _get_market_timezone(self, market: str) -> Optional[ZoneInfo]:
         """获取市场时区对象"""

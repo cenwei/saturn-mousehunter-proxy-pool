@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Saturn MouseHunter 代理池管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        .market-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .market-card {
+            border-left: 4px solid;
+        }
+
+        .market-card.cn { border-left-color: #e74c3c; }
+        .market-card.hk { border-left-color: #3498db; }
+        .market-card.us { border-left-color: #2ecc71; }
+
+        .market-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .market-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .status-running { background: #d5f4e6; color: #27ae60; }
+        .status-stopped { background: #fadbd8; color: #e74c3c; }
+        .status-error { background: #fdf2e9; color: #e67e22; }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-right: 0.5rem;
+        }
+
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5a6fd8; }
+
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #229954; }
+
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-danger:hover { background: #c0392b; }
+
+        .btn-warning { background: #f39c12; color: white; }
+        .btn-warning:hover { background: #e67e22; }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 0.75rem;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+            margin-top: 0.25rem;
+        }
+
+        .logs {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 1rem;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .log-error { color: #e74c3c; }
+        .log-warning { color: #f39c12; }
+        .log-info { color: #3498db; }
+        .log-success { color: #27ae60; }
+
+        .config-section {
+            border-top: 1px solid #eee;
+            padding-top: 1rem;
+            margin-top: 1rem;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #667eea;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🐭 Saturn MouseHunter 代理池管理</h1>
+        <p>多市场自动调度代理池管理系统</p>
+    </div>
+
+    <div class="container">
+        <!-- 市场概览 -->
+        <div class="card">
+            <h2>📊 市场概览</h2>
+            <div class="stats-row">
+                <div class="stat-item">
+                    <div class="stat-value" id="totalPools">-</div>
+                    <div class="stat-label">总代理池</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="runningPools">-</div>
+                    <div class="stat-label">运行中</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="totalProxies">-</div>
+                    <div class="stat-label">总代理数</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="avgSuccessRate">-</div>
+                    <div class="stat-label">平均成功率</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 市场管理 -->
+        <div class="market-grid">
+            <!-- CN市场 -->
+            <div class="card market-card cn">
+                <div class="market-header">
+                    <div class="market-title">🇨🇳 中国市场 (CN)</div>
+                    <span class="status-badge status-stopped" id="status-cn">已停止</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">海量代理URL</label>
+                    <input type="text" class="form-input" id="url-cn"
+                           value="http://api.hailiangip.com:8422/api/getIp?type=1&num=400&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0">
+                </div>
+
+                <div class="config-section">
+                    <div class="form-group">
+                        <label class="form-label">
+                            自动调度
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="autoSchedule-cn" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">盘前启动时间 (分钟)</label>
+                        <input type="number" class="form-input" id="preStart-cn" value="2" min="1" max="60">
+                    </div>
+                </div>
+
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <div class="stat-value" id="poolSize-cn">0</div>
+                        <div class="stat-label">池大小</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="successRate-cn">0%</div>
+                        <div class="stat-label">成功率</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <button class="btn btn-success" onclick="startMarket('cn')">启动</button>
+                    <button class="btn btn-danger" onclick="stopMarket('cn')">停止</button>
+                    <button class="btn btn-primary" onclick="updateConfig('cn')">更新配置</button>
+                    <button class="btn btn-warning" onclick="testAPI('cn')">测试API</button>
+                </div>
+            </div>
+
+            <!-- HK市场 -->
+            <div class="card market-card hk">
+                <div class="market-header">
+                    <div class="market-title">🇭🇰 香港市场 (HK)</div>
+                    <span class="status-badge status-stopped" id="status-hk">已停止</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">海量代理URL</label>
+                    <input type="text" class="form-input" id="url-hk"
+                           value="http://api.hailiangip.com:8422/api/getIp?type=1&num=400&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0">
+                </div>
+
+                <div class="config-section">
+                    <div class="form-group">
+                        <label class="form-label">
+                            自动调度
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="autoSchedule-hk" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">盘前启动时间 (分钟)</label>
+                        <input type="number" class="form-input" id="preStart-hk" value="2" min="1" max="60">
+                    </div>
+                </div>
+
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <div class="stat-value" id="poolSize-hk">0</div>
+                        <div class="stat-label">池大小</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="successRate-hk">0%</div>
+                        <div class="stat-label">成功率</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <button class="btn btn-success" onclick="startMarket('hk')">启动</button>
+                    <button class="btn btn-danger" onclick="stopMarket('hk')">停止</button>
+                    <button class="btn btn-primary" onclick="updateConfig('hk')">更新配置</button>
+                    <button class="btn btn-warning" onclick="testAPI('hk')">测试API</button>
+                </div>
+            </div>
+
+            <!-- US市场 -->
+            <div class="card market-card us">
+                <div class="market-header">
+                    <div class="market-title">🇺🇸 美国市场 (US)</div>
+                    <span class="status-badge status-stopped" id="status-us">已停止</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">海量代理URL</label>
+                    <input type="text" class="form-input" id="url-us"
+                           value="http://api.hailiangip.com:8422/api/getIp?type=1&num=400&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0">
+                </div>
+
+                <div class="config-section">
+                    <div class="form-group">
+                        <label class="form-label">
+                            自动调度
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="autoSchedule-us" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">盘前启动时间 (分钟)</label>
+                        <input type="number" class="form-input" id="preStart-us" value="2" min="1" max="60">
+                    </div>
+                </div>
+
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <div class="stat-value" id="poolSize-us">0</div>
+                        <div class="stat-label">池大小</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="successRate-us">0%</div>
+                        <div class="stat-label">成功率</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <button class="btn btn-success" onclick="startMarket('us')">启动</button>
+                    <button class="btn btn-danger" onclick="stopMarket('us')">停止</button>
+                    <button class="btn btn-primary" onclick="updateConfig('us')">更新配置</button>
+                    <button class="btn btn-warning" onclick="testAPI('us')">测试API</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 系统日志 -->
+        <div class="card">
+            <h2>📋 系统日志</h2>
+            <div class="logs" id="systemLogs">系统启动中...</div>
+            <div style="margin-top: 1rem;">
+                <button class="btn btn-primary" onclick="clearLogs()">清空日志</button>
+                <button class="btn btn-primary" onclick="refreshLogs()">刷新日志</button>
+            </div>
+        </div>
+
+        <!-- 批量操作 -->
+        <div class="card">
+            <h2>⚡ 批量操作</h2>
+            <div style="margin-bottom: 1rem;">
+                <button class="btn btn-success" onclick="startAllMarkets()">启动所有市场</button>
+                <button class="btn btn-danger" onclick="stopAllMarkets()">停止所有市场</button>
+                <button class="btn btn-primary" onclick="refreshAllStatus()">刷新状态</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API基础URL
+        const API_BASE = 'http://localhost:8080/api/v1';
+
+        // 市场列表
+        const markets = ['cn', 'hk', 'us'];
+
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            addLog('系统初始化...', 'info');
+            refreshAllStatus();
+
+            // 每30秒自动刷新状态
+            setInterval(refreshAllStatus, 30000);
+        });
+
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const logsDiv = document.getElementById('systemLogs');
+            const timestamp = new Date().toLocaleString();
+            const logClass = `log-${type}`;
+            const logMessage = `[${timestamp}] ${message}\n`;
+
+            logsDiv.innerHTML += `<span class="${logClass}">${logMessage}</span>`;
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        // 清空日志
+        function clearLogs() {
+            document.getElementById('systemLogs').innerHTML = '';
+            addLog('日志已清空', 'info');
+        }
+
+        // 刷新日志
+        function refreshLogs() {
+            addLog('手动刷新日志', 'info');
+        }
+
+        // 启动市场
+        async function startMarket(market) {
+            try {
+                addLog(`正在启动${market.toUpperCase()}市场...`, 'info');
+
+                const response = await fetch(`${API_BASE}/start?market=${market}&mode=live`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    addLog(`${market.toUpperCase()}市场启动成功: ${result.message}`, 'success');
+                    updateMarketStatus(market, 'running');
+                } else {
+                    const error = await response.json();
+                    addLog(`${market.toUpperCase()}市场启动失败: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                addLog(`${market.toUpperCase()}市场启动异常: ${error.message}`, 'error');
+            }
+
+            // 刷新状态
+            setTimeout(() => getMarketStatus(market), 1000);
+        }
+
+        // 停止市场
+        async function stopMarket(market) {
+            try {
+                addLog(`正在停止${market.toUpperCase()}市场...`, 'info');
+
+                const response = await fetch(`${API_BASE}/stop?market=${market}&mode=live`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    addLog(`${market.toUpperCase()}市场停止成功: ${result.message}`, 'success');
+                    updateMarketStatus(market, 'stopped');
+                } else {
+                    const error = await response.json();
+                    addLog(`${market.toUpperCase()}市场停止失败: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                addLog(`${market.toUpperCase()}市场停止异常: ${error.message}`, 'error');
+            }
+
+            // 刷新状态
+            setTimeout(() => getMarketStatus(market), 1000);
+        }
+
+        // 更新配置
+        async function updateConfig(market) {
+            try {
+                const url = document.getElementById(`url-${market}`).value;
+                const autoSchedule = document.getElementById(`autoSchedule-${market}`).checked;
+                const preStart = parseInt(document.getElementById(`preStart-${market}`).value);
+
+                addLog(`正在更新${market.toUpperCase()}市场配置...`, 'info');
+
+                const response = await fetch(`${API_BASE}/config?market=${market}&mode=live`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        hailiang_api_url: url,
+                        hailiang_enabled: true,
+                        auto_start_enabled: autoSchedule,
+                        pre_market_start_minutes: preStart,
+                        batch_size: 400,
+                        rotation_interval_minutes: 7,
+                        proxy_lifetime_minutes: 10
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    addLog(`${market.toUpperCase()}市场配置更新成功`, 'success');
+                } else {
+                    const error = await response.json();
+                    addLog(`${market.toUpperCase()}市场配置更新失败: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                addLog(`${market.toUpperCase()}市场配置更新异常: ${error.message}`, 'error');
+            }
+        }
+
+        // 测试API
+        async function testAPI(market) {
+            try {
+                const url = document.getElementById(`url-${market}`).value;
+
+                addLog(`正在测试${market.toUpperCase()}市场API...`, 'info');
+
+                const response = await fetch(`${API_BASE}/config/hailiang/test`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        api_url: url
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    addLog(`${market.toUpperCase()}市场API测试成功: 获取${result.proxy_count}个代理`, 'success');
+                } else {
+                    const error = await response.json();
+                    addLog(`${market.toUpperCase()}市场API测试失败: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                addLog(`${market.toUpperCase()}市场API测试异常: ${error.message}`, 'error');
+            }
+        }
+
+        // 获取市场状态
+        async function getMarketStatus(market) {
+            try {
+                const response = await fetch(`${API_BASE}/status?market=${market}&mode=live`);
+
+                if (response.ok) {
+                    const status = await response.json();
+                    updateMarketUI(market, status);
+                } else {
+                    updateMarketStatus(market, 'error');
+                }
+            } catch (error) {
+                updateMarketStatus(market, 'error');
+                console.error(`获取${market}状态失败:`, error);
+            }
+        }
+
+        // 更新市场UI
+        function updateMarketUI(market, status) {
+            const running = status.running;
+            const stats = status.stats || {};
+
+            // 更新状态标签
+            updateMarketStatus(market, running ? 'running' : 'stopped');
+
+            // 更新统计数据
+            document.getElementById(`poolSize-${market}`).textContent =
+                stats.total_pool_size || 0;
+            document.getElementById(`successRate-${market}`).textContent =
+                `${stats.success_rate || 0}%`;
+        }
+
+        // 更新市场状态
+        function updateMarketStatus(market, status) {
+            const statusEl = document.getElementById(`status-${market}`);
+            statusEl.className = `status-badge status-${status}`;
+
+            switch(status) {
+                case 'running':
+                    statusEl.textContent = '运行中';
+                    break;
+                case 'stopped':
+                    statusEl.textContent = '已停止';
+                    break;
+                case 'error':
+                    statusEl.textContent = '错误';
+                    break;
+            }
+        }
+
+        // 刷新所有状态
+        async function refreshAllStatus() {
+            addLog('刷新所有市场状态...', 'info');
+
+            for (const market of markets) {
+                await getMarketStatus(market);
+            }
+
+            // 更新概览统计
+            await updateOverviewStats();
+        }
+
+        // 更新概览统计
+        async function updateOverviewStats() {
+            try {
+                const response = await fetch(`${API_BASE}/pools`);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const pools = data.pools || [];
+
+                    const totalPools = pools.length;
+                    const runningPools = pools.filter(p => p.running).length;
+
+                    let totalProxies = 0;
+                    let totalSuccessRate = 0;
+                    let validPools = 0;
+
+                    pools.forEach(pool => {
+                        const stats = pool.status?.stats || {};
+                        totalProxies += stats.total_pool_size || 0;
+                        if (stats.success_rate) {
+                            totalSuccessRate += stats.success_rate;
+                            validPools++;
+                        }
+                    });
+
+                    const avgSuccessRate = validPools > 0 ? (totalSuccessRate / validPools).toFixed(1) : 0;
+
+                    document.getElementById('totalPools').textContent = totalPools;
+                    document.getElementById('runningPools').textContent = runningPools;
+                    document.getElementById('totalProxies').textContent = totalProxies;
+                    document.getElementById('avgSuccessRate').textContent = `${avgSuccessRate}%`;
+                }
+            } catch (error) {
+                console.error('更新概览统计失败:', error);
+            }
+        }
+
+        // 启动所有市场
+        async function startAllMarkets() {
+            addLog('批量启动所有市场...', 'info');
+
+            for (const market of markets) {
+                await startMarket(market);
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 延迟1秒
+            }
+        }
+
+        // 停止所有市场
+        async function stopAllMarkets() {
+            addLog('批量停止所有市场...', 'info');
+
+            for (const market of markets) {
+                await stopMarket(market);
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 延迟1秒
+            }
+        }
+    </script>
+</body>
+</html>
