@@ -1,169 +1,293 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-代理池轮换微服务测试示例
+代理池服务测试脚本
 """
 
 import asyncio
+import httpx
+import json
 import sys
-from pathlib import Path
+import os
+from typing import Dict, Any
 
-# 添加src目录到Python路径
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# 添加shared模块路径
+sys.path.insert(0, '/home/cenwei/workspace/saturn_mousehunter/saturn-mousehunter-shared/src')
 
-from saturn_mousehunter_shared import get_logger
-from infrastructure.proxy_pool import ProxyPoolManager
-from infrastructure.config import get_proxy_pool_config
-
-
-async def test_proxy_pool_service():
-    """测试代理池服务"""
-    logger = get_logger("proxy_pool_test")
-
-    # 创建配置
-    config = get_proxy_pool_config()
-    config.market = "hk"
-    config.mode = "test"
-    config.target_size = 10
-    config.min_refresh_secs = 30
-
-    # 创建管理器
-    manager = ProxyPoolManager(config)
-
-    try:
-        logger.info("启动代理池服务测试...")
-
-        # 启动服务
-        await manager.start()
-        logger.info("服务启动成功")
-
-        # 等待一些代理被加载
-        await asyncio.sleep(2)
-
-        # 测试获取代理
-        for i in range(5):
-            proxy = await manager.get_proxy()
-            logger.info(f"获取代理 #{i+1}: {proxy}")
-
-            if proxy:
-                # 模拟失败报告
-                if i % 2 == 0:
-                    await manager.report_failure(proxy)
-                    logger.info(f"报告代理失败: {proxy}")
-
-        # 获取状态
-        status = await manager.get_status()
-        logger.info(f"服务状态: {status['running']}")
-        logger.info(f"代理池统计: {status['stats']}")
-
-        # 等待一个轮换周期
-        logger.info("等待代理池轮换...")
-        await asyncio.sleep(35)
-
-        # 再次获取状态
-        status = await manager.get_status()
-        logger.info(f"轮换后统计: {status['stats']}")
-
-    except Exception as e:
-        logger.error(f"测试失败: {e}")
-    finally:
-        # 停止服务
-        await manager.stop()
-        logger.info("服务已停止")
+from saturn_mousehunter_shared.config.service_endpoints import (
+    get_service_url,
+    ApiEndpoints,
+    ServiceEndpointConfig
+)
 
 
-async def test_api_client():
-    """测试API客户端"""
-    import httpx
+class ProxyPoolTester:
+    """代理池服务测试器"""
 
-    logger = get_logger("api_client_test")
+    def __init__(self, environment: str = "development"):
+        """初始化测试器"""
+        self.config = ServiceEndpointConfig(environment)
+        self.base_url = self.config.get_service_url("proxy-pool-service")
+        self.client = httpx.AsyncClient(timeout=30.0)
+        print(f"🔗 测试环境: {environment}")
+        print(f"🔗 服务地址: {self.base_url}")
 
-    try:
-        async with httpx.AsyncClient() as client:
-            # 健康检查
-            response = await client.get("http://localhost:8080/health")
-            logger.info(f"健康检查: {response.json()}")
+    async def __aenter__(self):
+        return self
 
-            # 获取配置
-            response = await client.get("http://localhost:8080/api/v1/config")
-            logger.info(f"配置信息: {response.json()}")
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.client.aclose()
 
-            # RPC调用 - 获取代理
-            response = await client.post(
-                "http://localhost:8080/api/v1/rpc",
-                json={"event": "get_proxy", "proxy_type": "short"}
-            )
-            proxy_data = response.json()
-            logger.info(f"RPC获取代理: {proxy_data}")
+    def get_endpoint_url(self, endpoint: str) -> str:
+        """获取端点完整URL"""
+        return self.config.get_service_url("proxy-pool-service", endpoint)
 
-            # RPC调用 - ping
-            response = await client.post(
-                "http://localhost:8080/api/v1/rpc",
-                json={"event": "ping"}
-            )
-            ping_data = response.json()
-            logger.info(f"RPC ping: {ping_data}")
+    async def test_health_check(self) -> Dict[str, Any]:
+        """测试健康检查"""
+        print("\n🔍 测试健康检查...")
+        try:
+            response = await self.client.get(f"{self.base_url}/health")
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 健康检查成功: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ 健康检查失败: {e}")
+            raise
 
-            # 如果有代理，测试失败报告
-            if proxy_data.get("proxy"):
-                response = await client.post(
-                    "http://localhost:8080/api/v1/rpc",
-                    json={
-                        "event": "report_failure",
-                        "proxy_addr": proxy_data["proxy"]
-                    }
-                )
-                logger.info(f"报告失败: {response.json()}")
+    async def test_list_pools(self) -> Dict[str, Any]:
+        """测试列出所有代理池"""
+        print("\n🔍 测试列出代理池...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.POOLS)
+            response = await self.client.get(url)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 列出代理池成功:")
+            for pool in result.get("pools", []):
+                print(f"   - {pool['key']}: {pool['market']}/{pool['mode']} (运行: {pool['running']})")
+            return result
+        except Exception as e:
+            print(f"❌ 列出代理池失败: {e}")
+            raise
 
-    except Exception as e:
-        logger.error(f"API测试失败: {e}")
+    async def test_get_config(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试获取配置"""
+        print(f"\n🔍 测试获取配置 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.CONFIG)
+            params = {"market": market, "mode": mode}
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 获取配置成功:")
+            print(f"   - 市场: {result.get('market')}")
+            print(f"   - 模式: {result.get('mode')}")
+            print(f"   - 后端: {result.get('backend')}")
+            config = result.get('config', {})
+            if config:
+                print(f"   - 海量代理: {'启用' if config.get('hailiang_enabled') else '禁用'}")
+                print(f"   - 批量大小: {config.get('batch_size')}")
+                print(f"   - 轮换间隔: {config.get('rotation_interval_minutes')}分钟")
+                print(f"   - 代理生命周期: {config.get('proxy_lifetime_minutes')}分钟")
+            return result
+        except Exception as e:
+            print(f"❌ 获取配置失败: {e}")
+            raise
+
+    async def test_get_status(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试获取状态"""
+        print(f"\n🔍 测试获取状态 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.STATUS)
+            params = {"market": market, "mode": mode}
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 获取状态成功:")
+            print(f"   - 状态: {result.get('status')}")
+            print(f"   - 运行中: {result.get('running')}")
+            print(f"   - 市场状态: {result.get('market_status')}")
+            stats = result.get('stats', {})
+            if stats:
+                print(f"   - 总请求: {stats.get('total_requests', 0)}")
+                print(f"   - 成功率: {stats.get('success_rate', 0)}%")
+            return result
+        except Exception as e:
+            print(f"❌ 获取状态失败: {e}")
+            raise
+
+    async def test_start_service(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试启动服务"""
+        print(f"\n🔍 测试启动服务 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.START)
+            params = {"market": market, "mode": mode}
+            response = await self.client.post(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 启动服务成功: {result.get('message')}")
+            return result
+        except Exception as e:
+            print(f"❌ 启动服务失败: {e}")
+            raise
+
+    async def test_get_metrics(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试获取指标"""
+        print(f"\n🔍 测试获取指标 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.METRICS)
+            params = {"market": market, "mode": mode}
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 获取指标成功:")
+            print(f"   - 运行状态: {result.get('running')}")
+            print(f"   - 活跃池: {result.get('active_pool')}")
+            print(f"   - 活跃池大小: {result.get('size_active')}")
+            print(f"   - 备用池大小: {result.get('size_standby')}")
+            print(f"   - 总池大小: {result.get('total_pool_size')}")
+            print(f"   - 成功率: {result.get('success_rate')}%")
+            return result
+        except Exception as e:
+            print(f"❌ 获取指标失败: {e}")
+            raise
+
+    async def test_update_config(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试更新配置"""
+        print(f"\n🔍 测试更新配置 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.CONFIG_UPDATE)
+            params = {"market": market, "mode": mode}
+            data = {
+                "rotation_interval_minutes": 7,
+                "proxy_lifetime_minutes": 10,
+                "batch_size": 400
+            }
+            response = await self.client.post(url, params=params, json=data)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 更新配置成功: {result.get('message')}")
+            return result
+        except Exception as e:
+            print(f"❌ 更新配置失败: {e}")
+            raise
+
+    async def test_hailiang_api(self) -> Dict[str, Any]:
+        """测试海量代理API"""
+        print("\n🔍 测试海量代理API...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.CONFIG_HAILIANG_TEST)
+            test_url = "http://api.hailiangip.com:8422/api/getIp?type=1&num=5&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0"
+            data = {"api_url": test_url}
+            response = await self.client.post(url, json=data)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 测试海量代理API成功:")
+            print(f"   - 状态: {result.get('status')}")
+            print(f"   - 获取数量: {result.get('proxy_count')}")
+            print(f"   - 示例代理: {result.get('sample_proxies', [])[:3]}")
+            return result
+        except Exception as e:
+            print(f"❌ 测试海量代理API失败: {e}")
+            raise
+
+    async def test_rpc_interface(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试RPC接口"""
+        print(f"\n🔍 测试RPC接口 ({market}/{mode})...")
+
+        # 测试ping
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.RPC)
+            data = {
+                "event": "ping",
+                "market": market,
+                "mode": mode
+            }
+            response = await self.client.post(url, json=data)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ RPC Ping成功:")
+            print(f"   - 消息: {result.get('message')}")
+            print(f"   - 市场: {result.get('market')}")
+            print(f"   - 模式: {result.get('mode')}")
+            print(f"   - 运行状态: {result.get('running')}")
+            print(f"   - 市场状态: {result.get('market_status')}")
+            return result
+        except Exception as e:
+            print(f"❌ RPC接口测试失败: {e}")
+            raise
+
+    async def test_stop_service(self, market: str = "hk", mode: str = "live") -> Dict[str, Any]:
+        """测试停止服务"""
+        print(f"\n🔍 测试停止服务 ({market}/{mode})...")
+        try:
+            url = self.get_endpoint_url(ApiEndpoints.ProxyPool.STOP)
+            params = {"market": market, "mode": mode}
+            response = await self.client.post(url, params=params)
+            response.raise_for_status()
+            result = response.json()
+            print(f"✅ 停止服务成功: {result.get('message')}")
+            return result
+        except Exception as e:
+            print(f"❌ 停止服务失败: {e}")
+            raise
+
+    async def run_comprehensive_test(self, market: str = "hk"):
+        """运行综合测试"""
+        print(f"\n🚀 开始综合测试 (市场: {market})")
+        print("=" * 60)
+
+        try:
+            # 1. 健康检查
+            await self.test_health_check()
+
+            # 2. 列出代理池
+            await self.test_list_pools()
+
+            # 3. 获取配置
+            await self.test_get_config(market, "live")
+
+            # 4. 获取状态
+            await self.test_get_status(market, "live")
+
+            # 5. 启动服务
+            await self.test_start_service(market, "live")
+
+            # 6. 等待一下服务启动
+            await asyncio.sleep(2)
+
+            # 7. 获取指标
+            await self.test_get_metrics(market, "live")
+
+            # 8. 更新配置
+            await self.test_update_config(market, "live")
+
+            # 9. 测试海量代理API
+            await self.test_hailiang_api()
+
+            # 10. 测试RPC接口
+            await self.test_rpc_interface(market, "live")
+
+            # 11. 停止服务
+            await self.test_stop_service(market, "live")
+
+            print("\n🎉 所有测试完成!")
+
+        except Exception as e:
+            print(f"\n💥 测试失败: {e}")
+            raise
 
 
-def test_external_fetch_function():
-    """测试外部代理获取函数"""
-    def custom_fetch_func():
-        """自定义代理获取函数"""
-        return [
-            "http://custom-proxy-1.example.com:8080",
-            "http://custom-proxy-2.example.com:8080",
-            "http://custom-proxy-3.example.com:8080"
-        ]
+async def main():
+    """主函数"""
+    environment = os.getenv("ENVIRONMENT", "development")
+    market = os.getenv("MARKET", "hk")
 
-    # 创建配置
-    config = get_proxy_pool_config()
-    config.market = "hk"
-    config.mode = "test"
-    config.auto_start = False
+    print("🧪 Saturn MouseHunter 代理池服务测试")
+    print("=" * 60)
 
-    # 创建管理器并设置自定义获取函数
-    manager = ProxyPoolManager(config)
-    manager.set_external_fetcher(custom_fetch_func)
-
-    print("外部代理获取函数设置成功")
-
-    # 返回用于uvicorn启动的应用
-    from main import app
-    return app
+    async with ProxyPoolTester(environment) as tester:
+        await tester.run_comprehensive_test(market)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="代理池测试")
-    parser.add_argument(
-        "--mode",
-        choices=["service", "client", "external"],
-        default="service",
-        help="测试模式"
-    )
-
-    args = parser.parse_args()
-
-    if args.mode == "service":
-        asyncio.run(test_proxy_pool_service())
-    elif args.mode == "client":
-        asyncio.run(test_api_client())
-    elif args.mode == "external":
-        app = test_external_fetch_function()
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=8081)
+    asyncio.run(main())
