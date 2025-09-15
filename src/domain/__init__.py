@@ -13,6 +13,10 @@ from .entities import (
     IMarketClock
 )
 from .services import ProxyPoolDomainService
+from .config_entities import (
+    ProxyPoolConfig, ProxyPoolStatus as PoolStatus, ProxyPoolMode,
+    IProxyPoolConfigRepository, IProxyPoolStatusRepository
+)
 
 __all__ = [
     "MarketType",
@@ -23,5 +27,7 @@ __all__ = [
     "IProxyRepository",
     "IProxyFetcher",
     "IMarketClock",
-    "ProxyPoolDomainService"
+    "ProxyPoolDomainService",
+    "ProxyPoolConfig", "PoolStatus", "ProxyPoolMode",
+    "IProxyPoolConfigRepository", "IProxyPoolStatusRepository"
 ]

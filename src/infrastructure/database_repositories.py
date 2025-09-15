@@ -1,0 +1,284 @@
+"""
+Infrastructure层 - 代理池配置数据库仓储实现
+"""
+
+from __future__ import annotations
+from typing import Optional
+from datetime import datetime
+
+from saturn_mousehunter_shared import get_logger
+from saturn_mousehunter_shared.infra.database import get_db_connection
+from domain.config_entities import (
+    ProxyPoolConfig, ProxyPoolStatus, ProxyPoolMode,
+    IProxyPoolConfigRepository, IProxyPoolStatusRepository
+)
+
+
+class DatabaseProxyPoolConfigRepository(IProxyPoolConfigRepository):
+    """数据库代理池配置仓储"""
+
+    def __init__(self):
+        self.logger = get_logger("proxy_pool_config_repo")
+
+    async def get_config(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolConfig]:
+        """获取配置"""
+        async with get_db_connection() as conn:
+            query = """
+            SELECT id, market, mode, hailiang_api_url, hailiang_enabled,
+                   batch_size, proxy_lifetime_minutes, rotation_interval_minutes,
+                   low_watermark, target_size,
+                   auto_start_enabled, pre_market_start_minutes, post_market_stop_minutes,
+                   backfill_enabled, backfill_duration_hours,
+                   created_at, updated_at, is_active
+            FROM proxy_pool_config
+            WHERE market = %s AND mode = %s AND is_active = TRUE
+            """
+
+            result = await conn.fetchone(query, (market, mode.value))
+            if not result:
+                return None
+
+            return ProxyPoolConfig(
+                id=result['id'],
+                market=result['market'],
+                mode=ProxyPoolMode(result['mode']),
+                hailiang_api_url=result['hailiang_api_url'],
+                hailiang_enabled=result['hailiang_enabled'],
+                batch_size=result['batch_size'],
+                proxy_lifetime_minutes=result['proxy_lifetime_minutes'],
+                rotation_interval_minutes=result['rotation_interval_minutes'],
+                low_watermark=result['low_watermark'],
+                target_size=result['target_size'],
+                auto_start_enabled=result['auto_start_enabled'],
+                pre_market_start_minutes=result['pre_market_start_minutes'],
+                post_market_stop_minutes=result['post_market_stop_minutes'],
+                backfill_enabled=result['backfill_enabled'],
+                backfill_duration_hours=result['backfill_duration_hours'],
+                created_at=result['created_at'],
+                updated_at=result['updated_at'],
+                is_active=result['is_active']
+            )
+
+    async def save_config(self, config: ProxyPoolConfig) -> ProxyPoolConfig:
+        """保存配置"""
+        async with get_db_connection() as conn:
+            query = """
+            INSERT INTO proxy_pool_config (
+                market, mode, hailiang_api_url, hailiang_enabled,
+                batch_size, proxy_lifetime_minutes, rotation_interval_minutes,
+                low_watermark, target_size,
+                auto_start_enabled, pre_market_start_minutes, post_market_stop_minutes,
+                backfill_enabled, backfill_duration_hours, is_active
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            result = await conn.execute(query, (
+                config.market, config.mode.value, config.hailiang_api_url, config.hailiang_enabled,
+                config.batch_size, config.proxy_lifetime_minutes, config.rotation_interval_minutes,
+                config.low_watermark, config.target_size,
+                config.auto_start_enabled, config.pre_market_start_minutes, config.post_market_stop_minutes,
+                config.backfill_enabled, config.backfill_duration_hours, config.is_active
+            ))
+
+            config.id = result.lastrowid
+            config.created_at = datetime.now()
+            config.updated_at = datetime.now()
+
+            self.logger.info(f"Saved config for {config.market}/{config.mode.value} with ID {config.id}")
+            return config
+
+    async def update_config(self, config: ProxyPoolConfig) -> bool:
+        """更新配置"""
+        async with get_db_connection() as conn:
+            query = """
+            UPDATE proxy_pool_config SET
+                hailiang_api_url = %s, hailiang_enabled = %s,
+                batch_size = %s, proxy_lifetime_minutes = %s, rotation_interval_minutes = %s,
+                low_watermark = %s, target_size = %s,
+                auto_start_enabled = %s, pre_market_start_minutes = %s, post_market_stop_minutes = %s,
+                backfill_enabled = %s, backfill_duration_hours = %s,
+                is_active = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """
+
+            affected_rows = await conn.execute(query, (
+                config.hailiang_api_url, config.hailiang_enabled,
+                config.batch_size, config.proxy_lifetime_minutes, config.rotation_interval_minutes,
+                config.low_watermark, config.target_size,
+                config.auto_start_enabled, config.pre_market_start_minutes, config.post_market_stop_minutes,
+                config.backfill_enabled, config.backfill_duration_hours,
+                config.is_active, config.id
+            ))
+
+            success = affected_rows > 0
+            if success:
+                self.logger.info(f"Updated config for {config.market}/{config.mode.value}")
+            else:
+                self.logger.warning(f"No rows affected when updating config ID {config.id}")
+
+            return success
+
+    async def get_all_active_configs(self) -> list[ProxyPoolConfig]:
+        """获取所有激活的配置"""
+        async with get_db_connection() as conn:
+            query = """
+            SELECT id, market, mode, hailiang_api_url, hailiang_enabled,
+                   batch_size, proxy_lifetime_minutes, rotation_interval_minutes,
+                   low_watermark, target_size,
+                   auto_start_enabled, pre_market_start_minutes, post_market_stop_minutes,
+                   backfill_enabled, backfill_duration_hours,
+                   created_at, updated_at, is_active
+            FROM proxy_pool_config
+            WHERE is_active = TRUE
+            ORDER BY market, mode
+            """
+
+            results = await conn.fetchall(query)
+            configs = []
+
+            for result in results:
+                config = ProxyPoolConfig(
+                    id=result['id'],
+                    market=result['market'],
+                    mode=ProxyPoolMode(result['mode']),
+                    hailiang_api_url=result['hailiang_api_url'],
+                    hailiang_enabled=result['hailiang_enabled'],
+                    batch_size=result['batch_size'],
+                    proxy_lifetime_minutes=result['proxy_lifetime_minutes'],
+                    rotation_interval_minutes=result['rotation_interval_minutes'],
+                    low_watermark=result['low_watermark'],
+                    target_size=result['target_size'],
+                    auto_start_enabled=result['auto_start_enabled'],
+                    pre_market_start_minutes=result['pre_market_start_minutes'],
+                    post_market_stop_minutes=result['post_market_stop_minutes'],
+                    backfill_enabled=result['backfill_enabled'],
+                    backfill_duration_hours=result['backfill_duration_hours'],
+                    created_at=result['created_at'],
+                    updated_at=result['updated_at'],
+                    is_active=result['is_active']
+                )
+                configs.append(config)
+
+            return configs
+
+
+class DatabaseProxyPoolStatusRepository(IProxyPoolStatusRepository):
+    """数据库代理池状态仓储"""
+
+    def __init__(self):
+        self.logger = get_logger("proxy_pool_status_repo")
+
+    async def get_status(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolStatus]:
+        """获取状态"""
+        async with get_db_connection() as conn:
+            query = """
+            SELECT id, market, mode, is_running, started_at, stopped_at, last_rotation_at,
+                   active_pool, pool_a_size, pool_b_size,
+                   total_requests, success_count, failure_count, success_rate,
+                   updated_at
+            FROM proxy_pool_status
+            WHERE market = %s AND mode = %s
+            """
+
+            result = await conn.fetchone(query, (market, mode.value))
+            if not result:
+                return None
+
+            return ProxyPoolStatus(
+                id=result['id'],
+                market=result['market'],
+                mode=ProxyPoolMode(result['mode']),
+                is_running=result['is_running'],
+                started_at=result['started_at'],
+                stopped_at=result['stopped_at'],
+                last_rotation_at=result['last_rotation_at'],
+                active_pool=result['active_pool'],
+                pool_a_size=result['pool_a_size'],
+                pool_b_size=result['pool_b_size'],
+                total_requests=result['total_requests'],
+                success_count=result['success_count'],
+                failure_count=result['failure_count'],
+                success_rate=result['success_rate'],
+                updated_at=result['updated_at']
+            )
+
+    async def save_status(self, status: ProxyPoolStatus) -> ProxyPoolStatus:
+        """保存状态"""
+        async with get_db_connection() as conn:
+            query = """
+            INSERT INTO proxy_pool_status (
+                market, mode, is_running, started_at, stopped_at, last_rotation_at,
+                active_pool, pool_a_size, pool_b_size,
+                total_requests, success_count, failure_count, success_rate
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                is_running = VALUES(is_running),
+                started_at = VALUES(started_at),
+                stopped_at = VALUES(stopped_at),
+                last_rotation_at = VALUES(last_rotation_at),
+                active_pool = VALUES(active_pool),
+                pool_a_size = VALUES(pool_a_size),
+                pool_b_size = VALUES(pool_b_size),
+                total_requests = VALUES(total_requests),
+                success_count = VALUES(success_count),
+                failure_count = VALUES(failure_count),
+                success_rate = VALUES(success_rate),
+                updated_at = CURRENT_TIMESTAMP
+            """
+
+            await conn.execute(query, (
+                status.market, status.mode.value, status.is_running,
+                status.started_at, status.stopped_at, status.last_rotation_at,
+                status.active_pool, status.pool_a_size, status.pool_b_size,
+                status.total_requests, status.success_count, status.failure_count, status.success_rate
+            ))
+
+            self.logger.info(f"Saved/Updated status for {status.market}/{status.mode.value}")
+            return status
+
+    async def update_status(self, status: ProxyPoolStatus) -> bool:
+        """更新状态"""
+        return await self.save_status(status) is not None
+
+    async def update_pool_stats(self, market: str, mode: ProxyPoolMode,
+                               active_pool: str, pool_a_size: int, pool_b_size: int) -> bool:
+        """更新池统计信息"""
+        async with get_db_connection() as conn:
+            query = """
+            UPDATE proxy_pool_status SET
+                active_pool = %s, pool_a_size = %s, pool_b_size = %s,
+                last_rotation_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE market = %s AND mode = %s
+            """
+
+            affected_rows = await conn.execute(query, (
+                active_pool, pool_a_size, pool_b_size, market, mode.value
+            ))
+
+            return affected_rows > 0
+
+    async def increment_request_stats(self, market: str, mode: ProxyPoolMode,
+                                    success: bool) -> bool:
+        """增加请求统计"""
+        async with get_db_connection() as conn:
+            if success:
+                query = """
+                UPDATE proxy_pool_status SET
+                    total_requests = total_requests + 1,
+                    success_count = success_count + 1,
+                    success_rate = (success_count + 1) / (total_requests + 1) * 100,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE market = %s AND mode = %s
+                """
+            else:
+                query = """
+                UPDATE proxy_pool_status SET
+                    total_requests = total_requests + 1,
+                    failure_count = failure_count + 1,
+                    success_rate = success_count / (total_requests + 1) * 100,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE market = %s AND mode = %s
+                """
+
+            affected_rows = await conn.execute(query, (market, mode.value))
+            return affected_rows > 0

@@ -7,28 +7,48 @@ from fastapi.middleware.cors import CORSMiddleware
 from saturn_mousehunter_shared import get_logger
 from infrastructure.config import get_app_config
 from infrastructure.proxy_pool import ProxyPoolManager
+from domain.config_entities import ProxyPoolMode
 from api.routes import proxy_pool_routes
+import os
 
 log = get_logger(__name__)
 
 # 获取配置
 app_config = get_app_config()
 
-# 全局代理池管理器
-proxy_pool_manager: ProxyPoolManager = None
+# 全局代理池管理器字典
+proxy_pool_managers: dict[str, ProxyPoolManager] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global proxy_pool_manager
+    global proxy_pool_managers
 
     # 启动阶段
     log.info(f"启动代理池服务 - {app_config.app_name} v{app_config.version}")
-    proxy_pool_manager = ProxyPoolManager(app_config.proxy_pool)
 
-    if app_config.proxy_pool.auto_start:
-        await proxy_pool_manager.start()
+    # 从环境变量获取要启动的市场
+    markets = os.getenv("MARKETS", "hk").split(",")
+
+    for market in markets:
+        market = market.strip().lower()
+
+        # 创建live模式的代理池管理器
+        live_manager = ProxyPoolManager(market, ProxyPoolMode.LIVE)
+        proxy_pool_managers[f"{market}_live"] = live_manager
+
+        # 创建backfill模式的代理池管理器
+        backfill_manager = ProxyPoolManager(market, ProxyPoolMode.BACKFILL)
+        proxy_pool_managers[f"{market}_backfill"] = backfill_manager
+
+        # 如果配置为自动启动，则启动live模式
+        if app_config.proxy_pool.auto_start:
+            try:
+                await live_manager.start()
+                log.info(f"Auto-started live proxy pool for market {market}")
+            except Exception as e:
+                log.error(f"Failed to auto-start proxy pool for {market}: {e}")
 
     log.info(f"代理池服务已启动 - {app_config.app_name} v{app_config.version}")
 
@@ -36,8 +56,15 @@ async def lifespan(app: FastAPI):
 
     # 关闭阶段
     log.info("正在关闭代理池服务...")
-    if proxy_pool_manager:
-        await proxy_pool_manager.stop()
+    for key, manager in proxy_pool_managers.items():
+        if manager.is_running:
+            try:
+                await manager.stop()
+                log.info(f"Stopped proxy pool manager: {key}")
+            except Exception as e:
+                log.error(f"Error stopping manager {key}: {e}")
+
+    proxy_pool_managers.clear()
     log.info("代理池服务已关闭")
 
 
@@ -46,7 +73,7 @@ app = FastAPI(
     title=app_config.app_name,
     version=app_config.version,
     debug=app_config.debug,
-    description="Saturn MouseHunter代理池轮换微服务",
+    description="Saturn MouseHunter代理池轮换微服务 - 支持多市场自动调度",
     lifespan=lifespan
 )
 
@@ -63,17 +90,20 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    pool_healthy = proxy_pool_manager.is_running if proxy_pool_manager else False
-    stats = await proxy_pool_manager.get_status() if proxy_pool_manager else {}
+    running_pools = {
+        key: manager.is_running
+        for key, manager in proxy_pool_managers.items()
+    }
+
+    any_running = any(running_pools.values())
 
     return {
-        "status": "healthy" if pool_healthy else "unhealthy",
+        "status": "healthy" if any_running else "partial",
         "service": app_config.app_name,
         "version": app_config.version,
-        "proxy_pool": "running" if pool_healthy else "stopped",
-        "market": app_config.proxy_pool.market,
-        "mode": app_config.proxy_pool.mode,
-        "stats": stats.get("stats", {})
+        "proxy_pools": running_pools,
+        "total_pools": len(proxy_pool_managers),
+        "running_pools": sum(running_pools.values())
     }
 
 
@@ -82,8 +112,18 @@ app.include_router(proxy_pool_routes.router, prefix="/api/v1")
 
 
 # 依赖注入工厂函数
-def get_proxy_pool_manager():
-    return proxy_pool_manager
+def get_proxy_pool_manager(market: str, mode: str = "live") -> ProxyPoolManager:
+    """获取代理池管理器"""
+    key = f"{market.lower()}_{mode.lower()}"
+    manager = proxy_pool_managers.get(key)
+    if not manager:
+        raise ValueError(f"Proxy pool manager not found for {market}/{mode}")
+    return manager
+
+
+def get_all_proxy_pool_managers() -> dict[str, ProxyPoolManager]:
+    """获取所有代理池管理器"""
+    return proxy_pool_managers
 
 
 def main():
