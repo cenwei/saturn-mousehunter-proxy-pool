@@ -3,13 +3,12 @@ Infrastructure层 - 全局调度器
 """
 
 import asyncio
-from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from saturn_mousehunter_shared import get_logger
 from domain.config_entities import ProxyPoolMode, IProxyPoolConfigRepository
 from .market_clock import MarketClockService
-from .database_repositories import DatabaseProxyPoolConfigRepository
+from .postgresql_repositories import PostgreSQLProxyPoolConfigRepository
 
 
 class GlobalScheduler:
@@ -24,7 +23,9 @@ class GlobalScheduler:
         """
         self.get_manager_func = get_manager_func
         self.market_clock = MarketClockService()
-        self.config_repo: IProxyPoolConfigRepository = DatabaseProxyPoolConfigRepository()
+        self.config_repo: IProxyPoolConfigRepository = (
+            PostgreSQLProxyPoolConfigRepository()
+        )
         self.logger = get_logger("global_scheduler")
 
         self._running = False
@@ -82,7 +83,10 @@ class GlobalScheduler:
                     configs = await self.config_repo.get_all_active_configs()
 
                     for config in configs:
-                        if config.mode == ProxyPoolMode.LIVE and config.auto_start_enabled:
+                        if (
+                            config.mode == ProxyPoolMode.LIVE
+                            and config.auto_start_enabled
+                        ):
                             await self._check_market_schedule(config.market, config)
 
                     # 每分钟检查一次
@@ -98,6 +102,14 @@ class GlobalScheduler:
     async def _check_market_schedule(self, market: str, config):
         """检查市场调度"""
         try:
+            # 先检查管理器是否存在，避免不必要的市场时间计算
+            try:
+                manager = self.get_manager_func(market, "live")
+            except ValueError:
+                # 只在首次检查时记录调试信息，避免重复日志
+                self.logger.debug(f"No manager configured for market {market.upper()}, skipping schedule check")
+                return
+
             # 检查是否应该启动
             should_start = self.market_clock.should_start_trading_session(
                 market, config.pre_market_start_minutes
@@ -108,20 +120,19 @@ class GlobalScheduler:
                 market, config.post_market_stop_minutes
             )
 
-            # 获取管理器
-            try:
-                manager = self.get_manager_func(market, "live")
-            except ValueError:
-                self.logger.warning(f"No manager found for market {market}")
-                return
-
             current_running = manager.is_running
 
             # 决定操作
             if should_start and not current_running:
                 await self._start_market_with_logging(market, manager, config)
             elif should_stop and current_running:
-                await self._stop_market_with_logging(market, manager, config)
+                # 检查是否是手动启动的，如果是则不自动停止
+                if not getattr(manager, '_manually_started', False):
+                    await self._stop_market_with_logging(market, manager, config)
+                else:
+                    self.logger.debug(
+                        f"Market {market.upper()} is manually started, skipping auto-stop"
+                    )
             elif current_running:
                 # 如果正在运行，记录下次停止时间
                 await self._log_next_stop_time(market, config)
@@ -132,7 +143,9 @@ class GlobalScheduler:
     async def _start_market_with_logging(self, market: str, manager, config):
         """启动市场并记录日志"""
         try:
-            self.logger.info(f"🚀 Starting market {market.upper()} - trading session begins")
+            self.logger.info(
+                f"🚀 Starting market {market.upper()} - trading session begins"
+            )
             await manager.start()
 
             # 记录成功启动
@@ -147,7 +160,9 @@ class GlobalScheduler:
     async def _stop_market_with_logging(self, market: str, manager, config):
         """停止市场并记录日志"""
         try:
-            self.logger.info(f"🛑 Stopping market {market.upper()} - trading session ends")
+            self.logger.info(
+                f"🛑 Stopping market {market.upper()} - trading session ends"
+            )
             await manager.stop()
 
             # 记录成功停止
@@ -193,12 +208,18 @@ class GlobalScheduler:
 
             if stop_time:
                 time_until = stop_time - now
-                if hasattr(now, 'tzinfo') and hasattr(stop_time, 'tzinfo'):
+                if hasattr(now, "tzinfo") and hasattr(stop_time, "tzinfo"):
                     time_until = stop_time - now
                 else:
                     # 简化计算
-                    now_naive = now.replace(tzinfo=None) if hasattr(now, 'tzinfo') else now
-                    stop_naive = stop_time.replace(tzinfo=None) if hasattr(stop_time, 'tzinfo') else stop_time
+                    now_naive = (
+                        now.replace(tzinfo=None) if hasattr(now, "tzinfo") else now
+                    )
+                    stop_naive = (
+                        stop_time.replace(tzinfo=None)
+                        if hasattr(stop_time, "tzinfo")
+                        else stop_time
+                    )
                     time_until = stop_naive - now_naive
 
                 if time_until.total_seconds() > 0:
@@ -217,10 +238,7 @@ class GlobalScheduler:
         """获取调度状态"""
         try:
             configs = await self.config_repo.get_all_active_configs()
-            status = {
-                "scheduler_running": self._running,
-                "markets": {}
-            }
+            status = {"scheduler_running": self._running, "markets": {}}
 
             for config in configs:
                 if config.mode == ProxyPoolMode.LIVE:
@@ -239,9 +257,13 @@ class GlobalScheduler:
                     )
 
                     now = self.market_clock.market_now(market)
-                    next_stop = self.market_clock.get_post_market_stop_time(
-                        market, config.post_market_stop_minutes, now
-                    ) if is_running else None
+                    next_stop = (
+                        self.market_clock.get_post_market_stop_time(
+                            market, config.post_market_stop_minutes, now
+                        )
+                        if is_running
+                        else None
+                    )
 
                     status["markets"][market] = {
                         "running": is_running,
@@ -251,7 +273,9 @@ class GlobalScheduler:
                         "next_start": next_start.isoformat() if next_start else None,
                         "next_stop": next_stop.isoformat() if next_stop else None,
                         "is_trading_day": self.market_clock.is_trading_day(market, now),
-                        "market_status": self.market_clock.get_market_status_desc(market, now)
+                        "market_status": self.market_clock.get_market_status_desc(
+                            market, now
+                        ),
                     }
 
             return status
@@ -266,9 +290,14 @@ class GlobalScheduler:
             manager = self.get_manager_func(market, "live")
 
             if manager.is_running:
-                return {"status": "already_running", "message": f"Market {market} is already running"}
+                return {
+                    "status": "already_running",
+                    "message": f"Market {market} is already running",
+                }
 
-            await manager.start()
+            await manager.start(force=True)
+            # 标记为手动启动，防止自动停止
+            manager._manually_started = True
             self.logger.info(f"🔧 Manually started market {market.upper()}")
 
             return {"status": "started", "message": f"Market {market} started manually"}
@@ -283,7 +312,10 @@ class GlobalScheduler:
             manager = self.get_manager_func(market, "live")
 
             if not manager.is_running:
-                return {"status": "already_stopped", "message": f"Market {market} is already stopped"}
+                return {
+                    "status": "already_stopped",
+                    "message": f"Market {market} is already stopped",
+                }
 
             await manager.stop()
             self.logger.info(f"🔧 Manually stopped market {market.upper()}")

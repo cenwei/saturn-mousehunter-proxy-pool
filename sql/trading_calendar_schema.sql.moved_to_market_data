@@ -1,0 +1,446 @@
+-- =====================================================
+-- Saturn MouseHunter - 交易日历数据库表结构
+-- 支持多市场（CN/HK/US）交易日历管理，人工审核，日历类型
+-- =====================================================
+
+-- 创建UUID扩展
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 创建枚举类型
+CREATE TYPE market_enum AS ENUM ('cn', 'hk', 'us');
+CREATE TYPE day_type_enum AS ENUM ('trading_day', 'holiday', 'half_day', 'weekend', 'system_maintenance');
+CREATE TYPE change_type_enum AS ENUM (
+    'holiday_added', 'holiday_removed', 'trading_hours_changed',
+    'weekend_trading', 'half_day_trading', 'market_closure'
+);
+CREATE TYPE override_status_enum AS ENUM (
+    'pending_review', 'approved', 'rejected', 'auto_applied'
+);
+CREATE TYPE urgency_enum AS ENUM ('low', 'medium', 'high', 'critical');
+CREATE TYPE data_source_enum AS ENUM ('exchange_calendars', 'manual_override', 'system_default');
+
+-- =====================================================
+-- 1. 交易日历主表
+-- =====================================================
+CREATE TABLE mh_md_trading_calendars (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market market_enum NOT NULL,
+    calendar_date DATE NOT NULL,
+    year INTEGER NOT NULL,
+
+    -- 日历类型和状态
+    day_type day_type_enum NOT NULL DEFAULT 'trading_day',
+    is_trading_day BOOLEAN NOT NULL DEFAULT true,
+    is_half_day BOOLEAN NOT NULL DEFAULT false,
+
+    -- 交易时段信息 (JSON格式)
+    trading_sessions JSONB DEFAULT '[]'::jsonb,
+
+    -- 假期信息
+    holiday_name VARCHAR(200),
+    holiday_type VARCHAR(50), -- 'national', 'market_closure', 'religious' etc.
+
+    -- 数据来源
+    data_source data_source_enum NOT NULL DEFAULT 'exchange_calendars',
+    source_confidence DECIMAL(3,2) DEFAULT 1.0, -- 0.0-1.0，数据置信度
+
+    -- 审核状态
+    needs_verification BOOLEAN DEFAULT false,
+    verified_by VARCHAR(100),
+    verified_at TIMESTAMP WITH TIME ZONE,
+    verification_comments TEXT,
+
+    -- 元数据
+    original_data JSONB, -- 原始exchange_calendars数据
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    -- 约束
+    UNIQUE(market, calendar_date)
+);
+
+-- =====================================================
+-- 2. 日历覆盖表 - 人工调整管理
+-- =====================================================
+CREATE TABLE mh_md_calendar_overrides (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market market_enum NOT NULL,
+    change_type change_type_enum NOT NULL,
+    target_date DATE NOT NULL,
+
+    -- 覆盖数据
+    original_data JSONB, -- 原始日历数据
+    override_data JSONB NOT NULL, -- 调整后的数据
+
+    -- 提交信息
+    reason TEXT NOT NULL,
+    submitted_by VARCHAR(100) NOT NULL,
+    submitted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    -- 审核流程
+    status override_status_enum NOT NULL DEFAULT 'pending_review',
+    reviewed_by VARCHAR(100),
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    review_comments TEXT,
+
+    -- 生效时间
+    effective_from TIMESTAMP WITH TIME ZONE,
+    expires_at TIMESTAMP WITH TIME ZONE,
+
+    -- 关联字段
+    verification_task_id UUID REFERENCES mh_md_verification_tasks(id),
+
+    -- 元数据
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- =====================================================
+-- 3. 验证任务表 - 人工校验管理
+-- =====================================================
+CREATE TABLE mh_md_verification_tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market market_enum NOT NULL,
+    task_type change_type_enum NOT NULL,
+    target_date DATE NOT NULL,
+
+    -- 优先级和截止时间
+    urgency urgency_enum NOT NULL,
+    deadline DATE NOT NULL,
+
+    -- 自动生成的数据
+    auto_generated_data JSONB NOT NULL,
+    suggested_overrides JSONB DEFAULT '[]'::jsonb,
+
+    -- 任务分配
+    assigned_to VARCHAR(100),
+    assigned_at TIMESTAMP WITH TIME ZONE,
+
+    -- 状态管理
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    completed_at TIMESTAMP WITH TIME ZONE,
+    completion_notes TEXT,
+
+    -- 元数据
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- =====================================================
+-- 4. 日历缓存表 - exchange_calendars数据缓存
+-- =====================================================
+CREATE TABLE mh_md_calendar_cache (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market market_enum NOT NULL,
+    year INTEGER NOT NULL,
+
+    -- 缓存数据
+    data JSONB NOT NULL,
+
+    -- 缓存管理
+    synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+
+    -- 数据统计
+    trading_days_count INTEGER,
+    holidays_count INTEGER,
+
+    -- 版本控制
+    exchange_calendars_version VARCHAR(20),
+
+    -- 元数据
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    UNIQUE(market, year)
+);
+
+-- =====================================================
+-- 5. 系统日志表
+-- =====================================================
+CREATE TABLE mh_md_calendar_system_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    level VARCHAR(10) NOT NULL,
+    message TEXT NOT NULL,
+    module VARCHAR(50),
+
+    -- 用户和会话信息
+    user_id VARCHAR(100),
+    session_id VARCHAR(100),
+
+    -- 关联实体
+    entity_type VARCHAR(50), -- 'calendar', 'override', 'task'
+    entity_id UUID,
+
+    -- 元数据
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- =====================================================
+-- 创建索引
+-- =====================================================
+
+-- mh_md_trading_calendars 索引
+CREATE INDEX idx_mh_md_trading_calendars_market_date ON mh_md_trading_calendars(market, calendar_date);
+CREATE INDEX idx_mh_md_trading_calendars_year_market ON mh_md_trading_calendars(year, market);
+CREATE INDEX idx_mh_md_trading_calendars_day_type ON mh_md_trading_calendars(day_type);
+CREATE INDEX idx_mh_md_trading_calendars_needs_verification ON mh_md_trading_calendars(needs_verification) WHERE needs_verification = true;
+CREATE INDEX idx_mh_md_trading_calendars_data_source ON mh_md_trading_calendars(data_source);
+CREATE INDEX idx_mh_md_trading_calendars_created_at ON mh_md_trading_calendars(created_at DESC);
+
+-- mh_md_calendar_overrides 索引
+CREATE INDEX idx_mh_md_calendar_overrides_market_date ON mh_md_calendar_overrides(market, target_date);
+CREATE INDEX idx_mh_md_calendar_overrides_status ON mh_md_calendar_overrides(status);
+CREATE INDEX idx_mh_md_calendar_overrides_submitted_at ON mh_md_calendar_overrides(submitted_at DESC);
+CREATE INDEX idx_mh_md_calendar_overrides_submitted_by ON mh_md_calendar_overrides(submitted_by);
+CREATE INDEX idx_mh_md_calendar_overrides_change_type ON mh_md_calendar_overrides(change_type);
+
+-- mh_md_verification_tasks 索引
+CREATE INDEX idx_mh_md_verification_tasks_market ON mh_md_verification_tasks(market);
+CREATE INDEX idx_mh_md_verification_tasks_urgency ON mh_md_verification_tasks(urgency);
+CREATE INDEX idx_mh_md_verification_tasks_deadline ON mh_md_verification_tasks(deadline);
+CREATE INDEX idx_mh_md_verification_tasks_status ON mh_md_verification_tasks(status);
+CREATE INDEX idx_mh_md_verification_tasks_assigned_to ON mh_md_verification_tasks(assigned_to);
+CREATE INDEX idx_mh_md_verification_tasks_created_at ON mh_md_verification_tasks(created_at DESC);
+
+-- mh_md_calendar_cache 索引
+CREATE INDEX idx_mh_md_calendar_cache_market_year ON mh_md_calendar_cache(market, year);
+CREATE INDEX idx_mh_md_calendar_cache_expires_at ON mh_md_calendar_cache(expires_at);
+CREATE INDEX idx_mh_md_calendar_cache_synced_at ON mh_md_calendar_cache(synced_at DESC);
+
+-- mh_md_calendar_system_logs 索引
+CREATE INDEX idx_mh_md_calendar_system_logs_created_at ON mh_md_calendar_system_logs(created_at DESC);
+CREATE INDEX idx_mh_md_calendar_system_logs_level ON mh_md_calendar_system_logs(level);
+CREATE INDEX idx_mh_md_calendar_system_logs_entity ON mh_md_calendar_system_logs(entity_type, entity_id);
+CREATE INDEX idx_mh_md_calendar_system_logs_user ON mh_md_calendar_system_logs(user_id);
+
+-- =====================================================
+-- 创建触发器 - 自动更新 updated_at
+-- =====================================================
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- 应用触发器
+CREATE TRIGGER update_mh_md_trading_calendars_updated_at
+    BEFORE UPDATE ON mh_md_trading_calendars
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_mh_md_calendar_overrides_updated_at
+    BEFORE UPDATE ON mh_md_calendar_overrides
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_mh_md_verification_tasks_updated_at
+    BEFORE UPDATE ON mh_md_verification_tasks
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- =====================================================
+-- 创建视图 - 便于查询
+-- =====================================================
+
+-- 当前有效交易日历视图
+CREATE VIEW v_mh_md_current_trading_calendar AS
+SELECT
+    tc.market,
+    tc.calendar_date,
+    tc.day_type,
+    tc.is_trading_day,
+    tc.is_half_day,
+    tc.trading_sessions,
+    tc.holiday_name,
+    tc.holiday_type,
+    CASE
+        WHEN co.id IS NOT NULL THEN co.override_data
+        ELSE tc.original_data
+    END as effective_data,
+    tc.needs_verification,
+    co.status as override_status,
+    tc.created_at
+FROM mh_md_trading_calendars tc
+LEFT JOIN mh_md_calendar_overrides co ON tc.market = co.market
+    AND tc.calendar_date = co.target_date
+    AND co.status = 'approved'
+    AND (co.expires_at IS NULL OR co.expires_at > NOW());
+
+-- 待审核任务汇总视图
+CREATE VIEW v_mh_md_pending_verification_summary AS
+SELECT
+    market,
+    urgency,
+    COUNT(*) as task_count,
+    MIN(deadline) as earliest_deadline,
+    MAX(created_at) as latest_created
+FROM mh_md_verification_tasks
+WHERE status = 'pending'
+GROUP BY market, urgency;
+
+-- 日历统计视图
+CREATE VIEW v_mh_md_calendar_statistics AS
+SELECT
+    tc.market,
+    tc.year,
+    COUNT(*) as total_days,
+    COUNT(*) FILTER (WHERE tc.is_trading_day = true) as trading_days,
+    COUNT(*) FILTER (WHERE tc.day_type = 'holiday') as holidays,
+    COUNT(*) FILTER (WHERE tc.is_half_day = true) as half_days,
+    COUNT(*) FILTER (WHERE tc.needs_verification = true) as needs_verification,
+    COUNT(co.id) as overrides_count
+FROM mh_md_trading_calendars tc
+LEFT JOIN mh_md_calendar_overrides co ON tc.market = co.market
+    AND tc.calendar_date = co.target_date
+GROUP BY tc.market, tc.year;
+
+-- =====================================================
+-- 插入初始数据
+-- =====================================================
+
+-- 插入系统初始化日志
+INSERT INTO mh_md_calendar_system_logs (level, message, module, entity_type)
+VALUES ('INFO', 'Trading calendar database schema initialized successfully', 'system', 'schema');
+
+-- 插入支持的市场基础配置数据
+INSERT INTO mh_md_calendar_cache (market, year, data, expires_at, metadata) VALUES
+('cn', 2025, '{"initialized": true, "market": "cn", "year": 2025}'::jsonb, NOW() + INTERVAL '1 day', '{"note": "placeholder for China A-share calendar"}'::jsonb),
+('hk', 2025, '{"initialized": true, "market": "hk", "year": 2025}'::jsonb, NOW() + INTERVAL '1 day', '{"note": "placeholder for Hong Kong stock market calendar"}'::jsonb),
+('us', 2025, '{"initialized": true, "market": "us", "year": 2025}'::jsonb, NOW() + INTERVAL '1 day', '{"note": "placeholder for US stock market calendar"}'::jsonb);
+
+-- =====================================================
+-- 数据库函数 - 便于操作
+-- =====================================================
+
+-- 获取市场交易日函数
+CREATE OR REPLACE FUNCTION get_trading_days(
+    p_market market_enum,
+    p_start_date DATE,
+    p_end_date DATE
+) RETURNS TABLE(trading_date DATE, day_type day_type_enum, is_half_day BOOLEAN) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        tc.calendar_date,
+        tc.day_type,
+        tc.is_half_day
+    FROM mh_md_trading_calendars tc
+    WHERE tc.market = p_market
+        AND tc.calendar_date BETWEEN p_start_date AND p_end_date
+        AND tc.is_trading_day = true
+    ORDER BY tc.calendar_date;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 检查是否为交易日函数
+CREATE OR REPLACE FUNCTION is_trading_day(
+    p_market market_enum,
+    p_date DATE
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_is_trading BOOLEAN := false;
+BEGIN
+    SELECT tc.is_trading_day INTO v_is_trading
+    FROM mh_md_trading_calendars tc
+    WHERE tc.market = p_market AND tc.calendar_date = p_date;
+
+    RETURN COALESCE(v_is_trading, false);
+END;
+$$ LANGUAGE plpgsql;
+
+-- 创建验证任务函数
+CREATE OR REPLACE FUNCTION create_verification_task(
+    p_market market_enum,
+    p_task_type change_type_enum,
+    p_target_date DATE,
+    p_urgency urgency_enum,
+    p_auto_data JSONB,
+    p_assigned_to VARCHAR DEFAULT NULL
+) RETURNS UUID AS $$
+DECLARE
+    v_task_id UUID;
+    v_deadline DATE;
+BEGIN
+    -- 根据紧急程度设置截止时间
+    CASE p_urgency
+        WHEN 'critical' THEN v_deadline := p_target_date;
+        WHEN 'high' THEN v_deadline := p_target_date - INTERVAL '1 day';
+        WHEN 'medium' THEN v_deadline := p_target_date - INTERVAL '3 days';
+        WHEN 'low' THEN v_deadline := p_target_date - INTERVAL '7 days';
+    END CASE;
+
+    INSERT INTO mh_md_verification_tasks (
+        market, task_type, target_date, urgency,
+        auto_generated_data, deadline, assigned_to
+    ) VALUES (
+        p_market, p_task_type, p_target_date, p_urgency,
+        p_auto_data, v_deadline, p_assigned_to
+    ) RETURNING id INTO v_task_id;
+
+    RETURN v_task_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================================
+-- 权限设置 (示例)
+-- =====================================================
+
+-- 创建角色
+-- CREATE ROLE calendar_admin;
+-- CREATE ROLE calendar_reviewer;
+-- CREATE ROLE calendar_readonly;
+
+-- 权限分配
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO calendar_admin;
+-- GRANT SELECT, INSERT, UPDATE ON mh_md_trading_calendars TO calendar_reviewer;
+-- GRANT SELECT, INSERT, UPDATE ON mh_md_calendar_overrides TO calendar_reviewer;
+-- GRANT SELECT, UPDATE ON mh_md_verification_tasks TO calendar_reviewer;
+-- GRANT SELECT ON ALL TABLES IN SCHEMA public TO calendar_readonly;
+
+-- =====================================================
+-- 说明文档
+-- =====================================================
+
+/*
+表结构说明：
+
+1. mh_md_trading_calendars - 交易日历主表
+   - 存储每个市场每天的日历信息
+   - 支持多种日历类型：交易日、假期、半日交易等
+   - 包含人工审核状态字段
+   - 存储原始数据和元数据
+
+2. mh_md_calendar_overrides - 日历覆盖表
+   - 管理人工调整和审核流程
+   - 存储原始数据和调整后数据对比
+   - 支持审批流程和生效时间控制
+
+3. mh_md_verification_tasks - 验证任务表
+   - 跟踪需要人工校验的任务
+   - 支持优先级和截止时间管理
+   - 包含任务分配功能
+
+4. mh_md_calendar_cache - 日历缓存表
+   - 缓存exchange_calendars库的原始数据
+   - 支持版本控制和过期管理
+
+5. mh_md_calendar_system_logs - 系统日志表
+   - 记录所有系统操作和变更
+   - 支持审计和故障排查
+
+使用示例：
+- 查询HK市场未来7天交易日：SELECT * FROM get_trading_days('hk', CURRENT_DATE, CURRENT_DATE + 7);
+- 检查是否交易日：SELECT is_trading_day('us', '2025-12-25');
+- 创建紧急验证任务：SELECT create_verification_task('cn', 'holiday_added', '2025-02-10', 'critical', '{"holiday_name": "临时假期"}'::jsonb);
+*/

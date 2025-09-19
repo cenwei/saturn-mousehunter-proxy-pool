@@ -4,8 +4,8 @@ Application层 - 代理池应用服务
 
 from __future__ import annotations
 
-from saturn_mousehunter_shared import get_logger, cached, cache_invalidate
-from domain import ProxyPoolDomainService
+from saturn_mousehunter_shared import get_logger, cache_with_ttl, cache_invalidate
+from domain.services import ProxyPoolDomainService
 
 
 class ProxyPoolApplicationService:
@@ -25,7 +25,7 @@ class ProxyPoolApplicationService:
         await self._invalidate_status_cache()
         await self.domain_service.report_failure(proxy_addr)
 
-    @cached(ttl=30, key_pattern="proxy_pool_status_{market}_{mode}")
+    @cache_with_ttl(30)
     async def get_status(self) -> dict:
         """获取服务状态（带缓存）"""
         return await self.domain_service.get_status()
@@ -35,9 +35,13 @@ class ProxyPoolApplicationService:
         """清除状态缓存"""
         pass
 
-    async def start_service(self) -> None:
-        """启动服务"""
-        await self.domain_service.start_service()
+    async def start_service(self, force: bool = False) -> None:
+        """启动服务
+
+        Args:
+            force: 是否强制启动，忽略市场时间检查
+        """
+        await self.domain_service.start_service(force=force)
         await self._invalidate_status_cache()
 
     async def stop_service(self) -> None:

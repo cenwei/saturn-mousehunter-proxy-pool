@@ -1,0 +1,827 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Saturn MouseHunter Proxy Pool Service",
+    "description": "代理池轮换微服务 - 支持多市场自动调度。本文档基于实际测试结果生成，确保接口响应格式的准确性。",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Saturn MouseHunter Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://192.168.8.168:8005/api/v1",
+      "description": "Development Server (测试验证)"
+    }
+  ],
+  "paths": {
+    "/start": {
+      "post": {
+        "tags": ["Service Management"],
+        "summary": "启动代理池服务",
+        "description": "启动指定市场和模式的代理池服务。支持强制启动以忽略市场时间限制。",
+        "operationId": "start_service",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码",
+            "example": "CN"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["live", "backfill"],
+              "default": "live"
+            },
+            "description": "运行模式",
+            "example": "live"
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "强制启动，忽略市场时间限制（人工启动时使用）",
+            "example": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "服务启动成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOperationResponse"
+                },
+                "example": {
+                  "status": "started",
+                  "message": "Proxy pool service started manually for cn/live"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "启动失败（如市场关闭）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "detail": "Market CN closed past termination time"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "代理池管理器未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "detail": "Manager not found for market CN"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stop": {
+      "post": {
+        "tags": ["Service Management"],
+        "summary": "停止代理池服务",
+        "description": "停止指定市场和模式的代理池服务",
+        "operationId": "stop_service",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["live", "backfill"],
+              "default": "live"
+            },
+            "description": "运行模式"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "服务停止成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOperationResponse"
+                },
+                "example": {
+                  "status": "stopped",
+                  "message": "Proxy pool service stopped for cn/live"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "停止失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{market}/proxy": {
+      "get": {
+        "tags": ["Proxy Operations"],
+        "summary": "获取代理IP",
+        "description": "从指定市场的代理池获取一个可用的代理IP。测试验证：成功返回真实代理地址。",
+        "operationId": "get_proxy",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["short", "long"],
+              "default": "short"
+            },
+            "description": "代理类型"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "代理获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyResponse"
+                },
+                "example": {
+                  "proxy": "112.28.228.44:28816",
+                  "market": "cn",
+                  "type": "short",
+                  "timestamp": "2025-09-19T16:00:56.385532"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "服务未运行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "detail": "Proxy pool service not running for market CN"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "代理池管理器未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{market}/proxy/failure": {
+      "post": {
+        "tags": ["Proxy Operations"],
+        "summary": "报告代理失败",
+        "description": "报告指定代理地址的失败情况，将其从池中移除。测试验证：成功处理失败报告并返回确认响应。",
+        "operationId": "report_proxy_failure",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyFailureRequest"
+              },
+              "example": {
+                "proxy": "112.28.228.43:26894",
+                "reason": "Manual test failure"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "失败报告成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyFailureResponse"
+                },
+                "example": {
+                  "status": "reported",
+                  "message": "Proxy failure reported: 112.28.228.43:26894",
+                  "reason": "Manual test failure",
+                  "timestamp": "2025-09-19T16:24:46.261713200"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "服务未运行或参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "代理池管理器未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{market}/proxies/list": {
+      "get": {
+        "tags": ["Proxy Operations"],
+        "summary": "获取代理池详细信息",
+        "description": "获取指定市场代理池的详细信息，包括活跃和备用代理列表。已修复客户端序列化兼容性问题。",
+        "operationId": "list_proxies",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "代理池信息获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyPoolDetailResponse"
+                },
+                "example": {
+                  "market": "cn",
+                  "mode": "live",
+                  "running": true,
+                  "pool_info": {
+                    "active_pool": "B",
+                    "standby_pool": "A",
+                    "total_count": 40
+                  },
+                  "proxies": {
+                    "active": [
+                      {
+                        "addr": "112.28.228.44:28816",
+                        "status": "active",
+                        "created_at": "2025-09-19T16:00:34.603000",
+                        "last_used": null,
+                        "failure_count": 0
+                      }
+                    ],
+                    "standby": []
+                  },
+                  "active_count": 20,
+                  "failed_count": 0,
+                  "stats": {
+                    "success_rate": 100.0,
+                    "total_requests": 1,
+                    "success_count": 1,
+                    "failure_count": 0,
+                    "successful_requests": 1,
+                    "failed_requests": 0,
+                    "avg_response_time": 150.0
+                  },
+                  "timestamp": "2025-09-19T16:24:46.261713200"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "代理池管理器未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pools": {
+      "get": {
+        "tags": ["Service Management"],
+        "summary": "列出所有代理池",
+        "description": "获取所有代理池的状态信息",
+        "operationId": "list_pools",
+        "responses": {
+          "200": {
+            "description": "代理池列表获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolsListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": ["Service Management"],
+        "summary": "获取服务状态",
+        "description": "获取指定代理池服务的运行状态和统计信息",
+        "operationId": "get_status",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["CN", "HK", "US"]
+            },
+            "description": "市场代码"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["live", "backfill"],
+              "default": "live"
+            },
+            "description": "运行模式"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "状态获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "代理池管理器未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ServiceOperationResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["started", "stopped"],
+            "description": "操作状态"
+          },
+          "message": {
+            "type": "string",
+            "description": "操作结果消息"
+          }
+        },
+        "required": ["status", "message"],
+        "description": "服务操作响应，基于实际测试验证"
+      },
+      "ProxyResponse": {
+        "type": "object",
+        "properties": {
+          "proxy": {
+            "type": "string",
+            "nullable": true,
+            "description": "代理地址 (IP:Port)，如果无可用代理则为null",
+            "example": "112.28.228.44:28816"
+          },
+          "market": {
+            "type": "string",
+            "description": "市场代码（小写）",
+            "example": "cn"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["short", "long"],
+            "description": "代理类型",
+            "example": "short"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "响应时间戳",
+            "example": "2025-09-19T16:00:56.385532"
+          }
+        },
+        "required": ["proxy", "market", "type", "timestamp"],
+        "description": "代理获取响应，基于真实API测试结果"
+      },
+      "ProxyFailureRequest": {
+        "type": "object",
+        "properties": {
+          "proxy": {
+            "type": "string",
+            "description": "失败的代理地址 (IP:Port)",
+            "example": "112.28.228.43:26894"
+          },
+          "reason": {
+            "type": "string",
+            "default": "Connection failed",
+            "description": "失败原因",
+            "example": "Manual test failure"
+          }
+        },
+        "required": ["proxy"],
+        "description": "代理失败报告请求"
+      },
+      "ProxyFailureResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["reported"],
+            "description": "报告状态"
+          },
+          "message": {
+            "type": "string",
+            "description": "报告结果消息",
+            "example": "Proxy failure reported: 112.28.228.43:26894"
+          },
+          "reason": {
+            "type": "string",
+            "description": "失败原因",
+            "example": "Manual test failure"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "报告时间戳",
+            "example": "2025-09-19T16:24:46.261713200"
+          }
+        },
+        "required": ["status", "message", "reason", "timestamp"],
+        "description": "代理失败报告响应，基于客户端测试验证"
+      },
+      "ProxyPoolDetailResponse": {
+        "type": "object",
+        "properties": {
+          "market": {
+            "type": "string",
+            "description": "市场代码（小写）",
+            "example": "cn"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["live", "backfill"],
+            "description": "运行模式",
+            "example": "live"
+          },
+          "running": {
+            "type": "boolean",
+            "description": "服务运行状态",
+            "example": true
+          },
+          "pool_info": {
+            "type": "object",
+            "properties": {
+              "active_pool": {
+                "type": "string",
+                "nullable": true,
+                "enum": ["A", "B", null],
+                "description": "当前活跃池标识",
+                "example": "B"
+              },
+              "standby_pool": {
+                "type": "string",
+                "nullable": true,
+                "enum": ["A", "B", null],
+                "description": "备用池标识",
+                "example": "A"
+              },
+              "total_count": {
+                "type": "integer",
+                "description": "总代理数量",
+                "example": 40
+              }
+            },
+            "required": ["active_pool", "standby_pool", "total_count"],
+            "description": "代理池信息（必需字段，解决客户端序列化问题）"
+          },
+          "proxies": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProxyDetail"
+                },
+                "description": "活跃代理列表"
+              },
+              "standby": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProxyDetail"
+                },
+                "description": "备用代理列表"
+              }
+            },
+            "required": ["active", "standby"],
+            "description": "代理列表（必需字段，解决客户端序列化问题）"
+          },
+          "active_count": {
+            "type": "integer",
+            "description": "活跃代理数量（必需字段）",
+            "example": 20
+          },
+          "failed_count": {
+            "type": "integer",
+            "description": "失败计数（必需字段）",
+            "example": 0
+          },
+          "stats": {
+            "type": "object",
+            "description": "增强统计信息",
+            "properties": {
+              "success_rate": {
+                "type": "number",
+                "format": "float",
+                "description": "成功率百分比",
+                "example": 100.0
+              },
+              "total_requests": {
+                "type": "integer",
+                "description": "总请求数",
+                "example": 1
+              },
+              "success_count": {
+                "type": "integer",
+                "description": "成功次数",
+                "example": 1
+              },
+              "failure_count": {
+                "type": "integer",
+                "description": "失败次数",
+                "example": 0
+              },
+              "successful_requests": {
+                "type": "integer",
+                "description": "成功请求数（增强字段）",
+                "example": 1
+              },
+              "failed_requests": {
+                "type": "integer",
+                "description": "失败请求数（增强字段）",
+                "example": 0
+              },
+              "avg_response_time": {
+                "type": "number",
+                "format": "float",
+                "description": "平均响应时间（毫秒）",
+                "example": 150.0
+              }
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "响应时间戳",
+            "example": "2025-09-19T16:24:46.261713200"
+          }
+        },
+        "required": ["market", "mode", "running", "pool_info", "proxies", "active_count", "failed_count", "timestamp"],
+        "description": "代理池详细响应，已修复客户端序列化兼容性"
+      },
+      "ProxyDetail": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "description": "代理地址 (IP:Port)",
+            "example": "112.28.228.44:28816"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "failed", "expired"],
+            "description": "代理状态",
+            "example": "active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "创建时间",
+            "example": "2025-09-19T16:00:34.603000"
+          },
+          "last_used": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "最后使用时间",
+            "example": null
+          },
+          "failure_count": {
+            "type": "integer",
+            "description": "失败次数",
+            "example": 0
+          }
+        },
+        "required": ["addr", "status", "failure_count"],
+        "description": "代理详细信息"
+      },
+      "StatusResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["ok"],
+            "description": "状态标识"
+          },
+          "running": {
+            "type": "boolean",
+            "description": "服务运行状态"
+          },
+          "market": {
+            "type": "string",
+            "description": "市场代码"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["live", "backfill"],
+            "description": "运行模式"
+          },
+          "market_status": {
+            "type": "string",
+            "description": "市场状态描述"
+          },
+          "stats": {
+            "type": "object",
+            "description": "统计信息"
+          }
+        },
+        "required": ["status", "running", "market", "mode", "market_status", "stats"]
+      },
+      "PoolsListResponse": {
+        "type": "object",
+        "properties": {
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolInfo"
+            },
+            "description": "代理池列表"
+          }
+        },
+        "required": ["pools"]
+      },
+      "PoolInfo": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "池标识键",
+            "example": "CN_live"
+          },
+          "market": {
+            "type": "string",
+            "description": "市场代码",
+            "example": "CN"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["live", "backfill"],
+            "description": "运行模式",
+            "example": "live"
+          },
+          "running": {
+            "type": "boolean",
+            "description": "运行状态",
+            "example": true
+          },
+          "status": {
+            "type": "object",
+            "description": "详细状态信息"
+          }
+        },
+        "required": ["key", "market", "mode", "running", "status"]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "错误详细信息"
+          }
+        },
+        "required": ["detail"],
+        "description": "标准错误响应格式"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Service Management",
+      "description": "代理池服务管理相关接口 - 启动、停止、状态查询"
+    },
+    {
+      "name": "Proxy Operations",
+      "description": "代理获取和管理相关接口 - 获取代理、报告失败、池详情查询"
+    }
+  ],
+  "x-test-info": {
+    "description": "本OpenAPI文档基于实际测试结果生成",
+    "test_results": {
+      "proxy_retrieval": "✅ 成功获取真实代理: 112.28.228.44:28816",
+      "failure_reporting": "✅ 成功报告代理失败并处理",
+      "service_management": "✅ 启动停止功能正常，支持force参数",
+      "client_compatibility": "✅ 已修复Kotlin客户端序列化问题",
+      "api_response_format": "✅ 所有必需字段已添加"
+    },
+    "known_issues": {
+      "loguru_formatting": "⚠️ 日志格式化错误（不影响功能）"
+    }
+  }
+}

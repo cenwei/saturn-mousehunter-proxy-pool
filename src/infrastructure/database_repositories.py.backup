@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime
 
 from saturn_mousehunter_shared import get_logger
-from saturn_mousehunter_shared.infra.database import get_db_connection
+from saturn_mousehunter_shared.infra import default_connect
 from domain.config_entities import (
     ProxyPoolConfig, ProxyPoolStatus, ProxyPoolMode,
     IProxyPoolConfigRepository, IProxyPoolStatusRepository
@@ -22,7 +22,7 @@ class DatabaseProxyPoolConfigRepository(IProxyPoolConfigRepository):
 
     async def get_config(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolConfig]:
         """获取配置"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             SELECT id, market, mode, hailiang_api_url, hailiang_enabled,
                    batch_size, proxy_lifetime_minutes, rotation_interval_minutes,
@@ -61,7 +61,7 @@ class DatabaseProxyPoolConfigRepository(IProxyPoolConfigRepository):
 
     async def save_config(self, config: ProxyPoolConfig) -> ProxyPoolConfig:
         """保存配置"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             INSERT INTO proxy_pool_config (
                 market, mode, hailiang_api_url, hailiang_enabled,
@@ -89,7 +89,7 @@ class DatabaseProxyPoolConfigRepository(IProxyPoolConfigRepository):
 
     async def update_config(self, config: ProxyPoolConfig) -> bool:
         """更新配置"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             UPDATE proxy_pool_config SET
                 hailiang_api_url = %s, hailiang_enabled = %s,
@@ -120,7 +120,7 @@ class DatabaseProxyPoolConfigRepository(IProxyPoolConfigRepository):
 
     async def get_all_active_configs(self) -> list[ProxyPoolConfig]:
         """获取所有激活的配置"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             SELECT id, market, mode, hailiang_api_url, hailiang_enabled,
                    batch_size, proxy_lifetime_minutes, rotation_interval_minutes,
@@ -170,7 +170,7 @@ class DatabaseProxyPoolStatusRepository(IProxyPoolStatusRepository):
 
     async def get_status(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolStatus]:
         """获取状态"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             SELECT id, market, mode, is_running, started_at, stopped_at, last_rotation_at,
                    active_pool, pool_a_size, pool_b_size,
@@ -204,7 +204,7 @@ class DatabaseProxyPoolStatusRepository(IProxyPoolStatusRepository):
 
     async def save_status(self, status: ProxyPoolStatus) -> ProxyPoolStatus:
         """保存状态"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             INSERT INTO proxy_pool_status (
                 market, mode, is_running, started_at, stopped_at, last_rotation_at,
@@ -243,7 +243,7 @@ class DatabaseProxyPoolStatusRepository(IProxyPoolStatusRepository):
     async def update_pool_stats(self, market: str, mode: ProxyPoolMode,
                                active_pool: str, pool_a_size: int, pool_b_size: int) -> bool:
         """更新池统计信息"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             query = """
             UPDATE proxy_pool_status SET
                 active_pool = %s, pool_a_size = %s, pool_b_size = %s,
@@ -260,7 +260,7 @@ class DatabaseProxyPoolStatusRepository(IProxyPoolStatusRepository):
     async def increment_request_stats(self, market: str, mode: ProxyPoolMode,
                                     success: bool) -> bool:
         """增加请求统计"""
-        async with get_db_connection() as conn:
+        async with default_connect() as conn:
             if success:
                 query = """
                 UPDATE proxy_pool_status SET

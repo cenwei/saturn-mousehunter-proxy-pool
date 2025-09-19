@@ -16,5 +16,5 @@ __all__ = [
     "MockProxyFetcher",
     "ExternalProxyFetcher",
     "MemoryProxyRepository",
-    "ProxyPoolManager"
+    "ProxyPoolManager",
 ]

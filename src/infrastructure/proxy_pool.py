@@ -10,15 +10,23 @@ from datetime import datetime
 
 from saturn_mousehunter_shared import get_logger
 from domain import (
-    MarketType, ProxyMode, ProxyPoolDomainService,
-    ProxyPoolConfig, PoolStatus, ProxyPoolMode,
-    IProxyPoolConfigRepository, IProxyPoolStatusRepository
+    MarketType,
+    ProxyMode,
+    ProxyPoolDomainService,
+    ProxyPoolConfig,
+    PoolStatus,
+    ProxyPoolMode,
+    IProxyPoolConfigRepository,
+    IProxyPoolStatusRepository,
 )
 from application import ProxyPoolApplicationService
 from .market_clock import MarketClockService
 from .proxy_fetchers import MockProxyFetcher, ExternalProxyFetcher, HailiangProxyFetcher
 from .memory_proxy_repository import MemoryProxyRepository
-from .database_repositories import DatabaseProxyPoolConfigRepository, DatabaseProxyPoolStatusRepository
+from .postgresql_repositories import (
+    PostgreSQLProxyPoolConfigRepository,
+    PostgreSQLProxyPoolStatusRepository,
+)
 
 
 class ProxyPoolManager:
@@ -30,8 +38,12 @@ class ProxyPoolManager:
         self.logger = get_logger(f"proxy_pool_manager.{market}.{mode.value}")
 
         # 数据库仓储
-        self._config_repo: IProxyPoolConfigRepository = DatabaseProxyPoolConfigRepository()
-        self._status_repo: IProxyPoolStatusRepository = DatabaseProxyPoolStatusRepository()
+        self._config_repo: IProxyPoolConfigRepository = (
+            PostgreSQLProxyPoolConfigRepository()
+        )
+        self._status_repo: IProxyPoolStatusRepository = (
+            PostgreSQLProxyPoolStatusRepository()
+        )
 
         # 配置缓存
         self._cached_config: Optional[ProxyPoolConfig] = None
@@ -47,6 +59,7 @@ class ProxyPoolManager:
 
         # 状态
         self._running = False
+        self._manually_started = False  # 跟踪是否手动启动
         self._monitor_task: Optional[asyncio.Task] = None
         self._scheduler_task: Optional[asyncio.Task] = None
 
@@ -57,15 +70,22 @@ class ProxyPoolManager:
 
         config = await self._config_repo.get_config(self.market, self.mode)
         if not config:
+            # 从环境变量或默认值创建配置
+            import os
+            default_url = "http://api.hailiangip.com:8422/api/getIp?type=1&num=20&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0"
+            api_url = os.getenv("HAILIANG_API_URL", default_url).strip()
+
             # 创建默认配置
             config = ProxyPoolConfig(
                 market=self.market,
                 mode=self.mode,
-                hailiang_api_url="http://api.hailiangip.com:8422/api/getIp?type=1&num=400&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0",
-                hailiang_enabled=True
+                hailiang_api_url=api_url,
+                hailiang_enabled=os.getenv("HAILIANG_ENABLED", "true").lower() == "true",
             )
             config = await self._config_repo.save_config(config)
-            self.logger.info(f"Created default config for {self.market}/{self.mode.value}")
+            self.logger.info(
+                f"Created default config for {self.market}/{self.mode.value}"
+            )
 
         self._cached_config = config
         return config
@@ -88,22 +108,27 @@ class ProxyPoolManager:
 
         # 创建代理仓储
         self._repository = MemoryProxyRepository(
-            market=MarketType(config.market),
-            mode=ProxyMode.LIVE if config.mode == ProxyPoolMode.LIVE else ProxyMode.MOCK,
+            market=MarketType(config.market.upper()),
+            mode=ProxyMode.LIVE
+            if config.mode == ProxyPoolMode.LIVE
+            else ProxyMode.MOCK,
             fetcher=self._fetcher,
             rotate_interval_sec=config.rotation_interval_seconds,
             low_watermark=config.low_watermark,
             target_size=config.target_size,
-            min_refresh_secs=config.proxy_lifetime_seconds + 60,  # 比代理生命周期长1分钟
-            batch_count=2  # A/B两个池
+            min_refresh_secs=config.proxy_lifetime_seconds
+            + 60,  # 比代理生命周期长1分钟
+            batch_count=2,  # A/B两个池
         )
 
         # 创建领域服务
         self._domain_service = ProxyPoolDomainService(
             proxy_repository=self._repository,
             market_clock=self._market_clock,
-            market=MarketType(config.market),
-            mode=ProxyMode.LIVE if config.mode == ProxyPoolMode.LIVE else ProxyMode.MOCK
+            market=MarketType(config.market.upper()),
+            mode=ProxyMode.LIVE
+            if config.mode == ProxyPoolMode.LIVE
+            else ProxyMode.MOCK,
         )
 
         # 创建应用服务
@@ -111,7 +136,9 @@ class ProxyPoolManager:
             domain_service=self._domain_service
         )
 
-        self.logger.info(f"Components initialized for {config.market}/{config.mode.value}")
+        self.logger.info(
+            f"Components initialized for {config.market}/{config.mode.value}"
+        )
 
     @property
     def is_running(self) -> bool:
@@ -131,19 +158,29 @@ class ProxyPoolManager:
         self._fetcher = ExternalProxyFetcher(fetch_func, self._cached_config.market)
         self.logger.info("External proxy fetcher configured")
 
-    async def start(self) -> None:
-        """启动代理池服务"""
+    async def start(self, force: bool = False) -> None:
+        """启动代理池服务
+
+        Args:
+            force: 是否强制启动，忽略市场时间检查
+        """
         if self._running:
             self.logger.warning("Service already running")
             return
 
-        self.logger.info(f"Starting proxy pool manager for {self.market}/{self.mode.value}")
+        self.logger.info(
+            f"Starting proxy pool manager for {self.market}/{self.mode.value}"
+            + (" (forced)" if force else "")
+        )
+
+        # 记录是否手动强制启动
+        self._manually_started = force
 
         # 初始化组件
         await self._initialize_components()
 
         # 启动应用服务
-        await self._application_service.start_service()
+        await self._application_service.start_service(force=force)
         self._running = True
 
         # 更新状态到数据库
@@ -155,7 +192,9 @@ class ProxyPoolManager:
             if config.auto_start_enabled:
                 self._scheduler_task = asyncio.create_task(self._trading_scheduler())
 
-        self.logger.info(f"Proxy pool manager started for {self.market}/{self.mode.value}")
+        self.logger.info(
+            f"Proxy pool manager started for {self.market}/{self.mode.value}"
+        )
 
     async def stop(self) -> None:
         """停止代理池服务"""
@@ -163,9 +202,12 @@ class ProxyPoolManager:
             self.logger.warning("Service not running")
             return
 
-        self.logger.info(f"Stopping proxy pool manager for {self.market}/{self.mode.value}")
+        self.logger.info(
+            f"Stopping proxy pool manager for {self.market}/{self.mode.value}"
+        )
 
         self._running = False
+        self._manually_started = False  # 重置手动启动标志
 
         # 取消调度任务
         if self._scheduler_task and not self._scheduler_task.done():
@@ -190,7 +232,9 @@ class ProxyPoolManager:
         # 更新状态到数据库
         await self._update_running_status(False)
 
-        self.logger.info(f"Proxy pool manager stopped for {self.market}/{self.mode.value}")
+        self.logger.info(
+            f"Proxy pool manager stopped for {self.market}/{self.mode.value}"
+        )
 
     async def start_manual(self, duration_hours: Optional[int] = None) -> None:
         """手动启动代理池（用于backfill模式）"""
@@ -201,7 +245,9 @@ class ProxyPoolManager:
 
         if duration_hours:
             # 设置定时停止
-            self._monitor_task = asyncio.create_task(self._auto_stop_after_duration(duration_hours))
+            self._monitor_task = asyncio.create_task(
+                self._auto_stop_after_duration(duration_hours)
+            )
 
     async def _auto_stop_after_duration(self, hours: int) -> None:
         """在指定时间后自动停止"""
@@ -245,7 +291,7 @@ class ProxyPoolManager:
                 "running": False,
                 "market": self.market,
                 "mode": self.mode.value,
-                "error": "Service not running"
+                "error": "Service not running",
             }
 
         app_status = await self._application_service.get_status()
@@ -258,16 +304,18 @@ class ProxyPoolManager:
             "market": self.market,
             "mode": self.mode.value,
             "market_status": app_status.get("market_status", "unknown"),
-            "stats": app_status.get("stats", {})
+            "stats": app_status.get("stats", {}),
         }
 
         if db_status:
-            status["stats"].update({
-                "total_requests": db_status.total_requests,
-                "success_count": db_status.success_count,
-                "failure_count": db_status.failure_count,
-                "success_rate": db_status.success_rate
-            })
+            status["stats"].update(
+                {
+                    "total_requests": db_status.total_requests,
+                    "success_count": db_status.success_count,
+                    "failure_count": db_status.failure_count,
+                    "success_rate": db_status.success_rate,
+                }
+            )
 
         return status
 
@@ -281,7 +329,7 @@ class ProxyPoolManager:
                     mode=self.mode,
                     is_running=running,
                     started_at=datetime.now() if running else None,
-                    stopped_at=None if running else datetime.now()
+                    stopped_at=None if running else datetime.now(),
                 )
             else:
                 status.is_running = running
@@ -311,10 +359,17 @@ class ProxyPoolManager:
                     self.market, config.post_market_stop_minutes
                 )
 
-                if should_stop:
-                    self.logger.info(f"Trading session ended for {self.market}, stopping service")
+                # 如果是手动启动的服务，不自动停止
+                if should_stop and not self._manually_started:
+                    self.logger.info(
+                        f"Trading session ended for {self.market}, stopping service"
+                    )
                     await self.stop()
                     break
+                elif should_stop and self._manually_started:
+                    self.logger.debug(
+                        f"Trading session ended for {self.market}, but service was manually started - continuing to run"
+                    )
 
                 if should_start and not self._monitor_task:
                     # 启动监控任务
@@ -333,12 +388,22 @@ class ProxyPoolManager:
             config = await self._load_config()
 
             while self._running:
-                should_continue = await self._application_service.should_continue_running()
-                if not should_continue:
-                    self.logger.info(f"Market {self.market} closed, initiating shutdown")
+                should_continue = (
+                    await self._application_service.should_continue_running()
+                )
+
+                # 如果是手动启动的服务，不自动停止
+                if not should_continue and not self._manually_started:
+                    self.logger.info(
+                        f"Market {self.market} closed, initiating shutdown"
+                    )
                     await asyncio.sleep(config.post_market_stop_minutes * 60)
                     await self.stop()
                     break
+                elif not should_continue and self._manually_started:
+                    self.logger.debug(
+                        f"Market {self.market} closed, but service was manually started - continuing to run"
+                    )
 
                 await asyncio.sleep(60)  # 每分钟检查一次
         except asyncio.CancelledError:
@@ -394,5 +459,5 @@ class ProxyPoolManager:
             "post_market_stop_minutes": config.post_market_stop_minutes,
             "backfill_enabled": config.backfill_enabled,
             "backfill_duration_hours": config.backfill_duration_hours,
-            "is_active": config.is_active
+            "is_active": config.is_active,
         }

@@ -1,20 +1,46 @@
 """
 代理池轮换微服务 - 主应用文件
+集成交易日历服务模块
 """
+
+import os
+import sys
 from contextlib import asynccontextmanager
+from typing import Optional
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from saturn_mousehunter_shared import get_logger
-from typing import Optional
-from infrastructure.config import get_app_config
-from infrastructure.proxy_pool import ProxyPoolManager
-from infrastructure.global_scheduler import GlobalScheduler
-from infrastructure.monitoring import AlertManager, HealthMonitor
-from domain.config_entities import ProxyPoolMode
-from api.routes import proxy_pool_routes
-import os
+
+# 添加src目录到Python路径，解决模块导入问题
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+
+# 加载 .env 文件（必须在业务模块导入之前）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ .env 文件已加载")
+except ImportError:
+    print("⚠️ python-dotenv 未安装，跳过 .env 文件加载")
+
+# 导入业务模块（在路径设置和环境加载之后）
+import api.routes.proxy_pool_routes as proxy_pool_routes  # noqa: E402
+import domain.config_entities as config_entities  # noqa: E402
+import infrastructure.dependencies as dependencies  # noqa: E402
+import infrastructure.config as infrastructure_config  # noqa: E402
+import infrastructure.global_scheduler as global_scheduler  # noqa: E402
+import infrastructure.monitoring as monitoring  # noqa: E402
+import infrastructure.proxy_pool as proxy_pool  # noqa: E402
+
+# 创建模块别名以保持向后兼容
+ProxyPoolMode = config_entities.ProxyPoolMode
+get_app_config = infrastructure_config.get_app_config
+GlobalScheduler = global_scheduler.GlobalScheduler
+AlertManager = monitoring.AlertManager
+HealthMonitor = monitoring.HealthMonitor
+ProxyPoolManager = proxy_pool.ProxyPoolManager
+proxy_pool_router = proxy_pool_routes.router
 
 log = get_logger(__name__)
 
@@ -52,17 +78,19 @@ async def lifespan(app: FastAPI):
     alert_manager.alert_info(
         "Service Starting",
         f"{app_config.app_name} v{app_config.version} is starting up",
-        component="SYSTEM"
+        component="SYSTEM",
     )
 
     # 从环境变量获取要启动的市场
-    markets = os.getenv("MARKETS", "hk").split(",")
+    markets = os.getenv("MARKETS", "CN").split(",")
 
     for market in markets:
-        market = market.strip().lower()
+        market = market.strip().upper()  # 改为大写，与dependencies保持一致
 
         # 创建live模式的代理池管理器
-        live_manager = ProxyPoolManager(market, ProxyPoolMode.LIVE)
+        live_manager = ProxyPoolManager(
+            market, ProxyPoolMode.LIVE
+        )  # 传入大写market，ProxyPoolManager内部会转小写用于标识
         proxy_pool_managers[f"{market}_live"] = live_manager
 
         # 创建backfill模式的代理池管理器
@@ -73,19 +101,25 @@ async def lifespan(app: FastAPI):
 
         alert_manager.alert_info(
             "Market Initialized",
-            f"Proxy pool managers created for market {market.upper()}",
-            market.upper(),
-            "INITIALIZATION"
+            f"Proxy pool managers created for market {market}",
+            market,
+            "INITIALIZATION",
         )
 
     # 启动全局调度器
     global_scheduler = GlobalScheduler(get_proxy_pool_manager)
     await global_scheduler.start()
 
+    # 注册到依赖注入模块
+    dependencies.set_proxy_pool_managers(proxy_pool_managers)
+    dependencies.set_global_scheduler(global_scheduler)
+    dependencies.set_alert_manager(alert_manager)
+    dependencies.set_health_monitor(health_monitor)
+
     alert_manager.alert_info(
         "Scheduler Started",
         "Global scheduler started successfully",
-        component="SCHEDULER"
+        component="SCHEDULER",
     )
 
     log.info(f"代理池服务已启动 - {app_config.app_name} v{app_config.version}")
@@ -96,9 +130,7 @@ async def lifespan(app: FastAPI):
     log.info("正在关闭代理池服务...")
 
     alert_manager.alert_info(
-        "Service Stopping",
-        "代理池服务正在关闭",
-        component="SYSTEM"
+        "Service Stopping", "代理池服务正在关闭", component="SYSTEM"
     )
 
     # 停止全局调度器
@@ -117,16 +149,12 @@ async def lifespan(app: FastAPI):
                     alert_manager.alert_error(
                         "Manager Stop Failed",
                         f"Failed to stop manager {key}: {str(e)}",
-                        component="SHUTDOWN"
+                        component="SHUTDOWN",
                     )
 
     proxy_pool_managers.clear()
 
-    alert_manager.alert_info(
-        "Service Stopped",
-        "代理池服务已关闭",
-        component="SYSTEM"
-    )
+    alert_manager.alert_info("Service Stopped", "代理池服务已关闭", component="SYSTEM")
 
     log.info("代理池服务已关闭")
 
@@ -137,7 +165,7 @@ app = FastAPI(
     version=app_config.version,
     debug=app_config.debug,
     description="Saturn MouseHunter代理池轮换微服务 - 支持多市场自动调度",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # 配置CORS
@@ -149,8 +177,11 @@ app.add_middleware(
     allow_headers=app_config.cors.allow_headers,
 )
 
+# 注册路由
+app.include_router(proxy_pool_router, prefix="/api/v1")
+
 # 挂载静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")
@@ -163,8 +194,7 @@ async def admin_interface():
 async def health_check():
     """健康检查"""
     running_pools = {
-        key: manager.is_running
-        for key, manager in proxy_pool_managers.items()
+        key: manager.is_running for key, manager in proxy_pool_managers.items()
     }
 
     any_running = any(running_pools.values())
@@ -175,18 +205,14 @@ async def health_check():
         "version": app_config.version,
         "proxy_pools": running_pools,
         "total_pools": len(proxy_pool_managers),
-        "running_pools": sum(running_pools.values())
+        "running_pools": sum(running_pools.values()),
     }
-
-
-# 注册路由
-app.include_router(proxy_pool_routes.router, prefix="/api/v1")
 
 
 # 依赖注入工厂函数
 def get_proxy_pool_manager(market: str, mode: str = "live") -> ProxyPoolManager:
     """获取代理池管理器"""
-    key = f"{market.lower()}_{mode.lower()}"
+    key = f"{market.upper()}_{mode.lower()}"  # 修改为与dependencies一致
     manager = proxy_pool_managers.get(key)
     if not manager:
         raise ValueError(f"Proxy pool manager not found for {market}/{mode}")
@@ -201,12 +227,13 @@ def get_all_proxy_pool_managers() -> dict[str, ProxyPoolManager]:
 def main():
     """主函数"""
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host=app_config.host,
         port=app_config.port,
         reload=app_config.reload,
-        log_level=app_config.log_level.lower()
+        log_level=app_config.log_level.lower(),
     )
 
 

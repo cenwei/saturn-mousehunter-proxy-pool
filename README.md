@@ -48,8 +48,8 @@ src/
 
 ### 环境要求
 
-- Python 3.8+
-- MySQL 8.0+
+- Python 3.12+
+- PostgreSQL (替代MySQL)
 - Redis (可选，用于缓存)
 
 ### 安装步骤
@@ -62,50 +62,39 @@ cd saturn-mousehunter-proxy-pool
 
 2. **安装依赖**
 ```bash
-pip install -r requirements.txt
-# 或使用 uv (推荐)
-uv pip install -r pyproject.toml
+# 使用 uv (推荐)
+uv sync
+
+# 或使用传统方式
+pip install -e .
 ```
 
 3. **配置数据库**
 ```bash
-# 编辑数据库连接配置
-export DB_HOST=localhost
-export DB_PORT=3306
-export DB_USER=your_username
-export DB_PASSWORD=your_password
-export DB_NAME=saturn_mousehunter
+# 编辑 .env 文件
+MARKET=CN
+HAILIANG_API_URL=http://api.hailiangip.com:8422/api/getIp?type=1&num=20&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0
+HAILIANG_ENABLED=true
 ```
 
-4. **初始化数据库**
-```bash
-python scripts/init_database.py
-```
+4. **启动服务 (推荐方式)**
 
-5. **启动服务**
-
-服务现在使用 saturn-mousehunter-shared 中的统一端点配置：
+**⚠️ 重要：不要直接运行 src/main.py，会导致导入路径错误**
 
 ```bash
-# 使用启动脚本（推荐）
-./start.sh
+# 使用Python启动脚本 (推荐)
+python start.py
 
-# 开发环境 (默认)
-ENVIRONMENT=development MARKETS=hk ./start.sh
+# 或使用Bash脚本
+./run.sh
 
-# 启动多个市场
-ENVIRONMENT=development MARKETS=cn,hk,us ./start.sh
-
-# 手动启动
-ENVIRONMENT=development MARKETS=cn,hk,us python src/main.py
+# ❌ 避免这样启动 - 会导致ImportError
+# python src/main.py
 ```
 
-6. **访问管理界面**
-
-根据环境不同：
-- **开发环境**: http://192.168.8.168:8005
-- **测试环境**: http://test-proxy-pool:8005
-- **生产环境**: http://proxy-pool.saturn-mousehunter.internal:8005
+5. **访问服务**
+- 健康检查: http://localhost:8080/health
+- API文档: http://localhost:8080/docs
 
 ### 🔧 配置说明
 

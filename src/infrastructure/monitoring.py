@@ -2,7 +2,6 @@
 Infrastructure层 - 监控告警系统
 """
 
-import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from saturn_mousehunter_shared import get_logger
 
 class AlertLevel(Enum):
     """告警级别"""
+
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
@@ -22,6 +22,7 @@ class AlertLevel(Enum):
 @dataclass
 class Alert:
     """告警信息"""
+
     id: str
     level: AlertLevel
     title: str
@@ -51,7 +52,7 @@ class AlertManager:
             "api_errors": 0,
             "proxy_failures": 0,
             "scheduler_errors": 0,
-            "database_errors": 0
+            "database_errors": 0,
         }
 
     def create_alert(
@@ -60,7 +61,7 @@ class AlertManager:
         title: str,
         message: str,
         market: Optional[str] = None,
-        component: Optional[str] = None
+        component: Optional[str] = None,
     ) -> Alert:
         """创建告警"""
         alert_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.alerts)}"
@@ -71,7 +72,7 @@ class AlertManager:
             title=title,
             message=message,
             market=market,
-            component=component
+            component=component,
         )
 
         # 添加到列表
@@ -79,7 +80,7 @@ class AlertManager:
 
         # 限制数量
         if len(self.alerts) > self.max_alerts:
-            self.alerts = self.alerts[-self.max_alerts:]
+            self.alerts = self.alerts[-self.max_alerts :]
 
         # 统计
         level_key = level.value
@@ -91,20 +92,28 @@ class AlertManager:
 
         return alert
 
-    def alert_info(self, title: str, message: str, market: str = None, component: str = None):
+    def alert_info(
+        self, title: str, message: str, market: str = None, component: str = None
+    ):
         """信息告警"""
         return self.create_alert(AlertLevel.INFO, title, message, market, component)
 
-    def alert_warning(self, title: str, message: str, market: str = None, component: str = None):
+    def alert_warning(
+        self, title: str, message: str, market: str = None, component: str = None
+    ):
         """警告告警"""
         return self.create_alert(AlertLevel.WARNING, title, message, market, component)
 
-    def alert_error(self, title: str, message: str, market: str = None, component: str = None):
+    def alert_error(
+        self, title: str, message: str, market: str = None, component: str = None
+    ):
         """错误告警"""
         self.error_stats["total_errors"] += 1
         return self.create_alert(AlertLevel.ERROR, title, message, market, component)
 
-    def alert_critical(self, title: str, message: str, market: str = None, component: str = None):
+    def alert_critical(
+        self, title: str, message: str, market: str = None, component: str = None
+    ):
         """严重告警"""
         self.error_stats["total_errors"] += 1
         return self.create_alert(AlertLevel.CRITICAL, title, message, market, component)
@@ -129,14 +138,13 @@ class AlertManager:
         self.error_stats["database_errors"] += 1
         return self.alert_critical("Database Error", message, None, component)
 
-    def get_recent_alerts(self, hours: int = 24, level: AlertLevel = None) -> List[Alert]:
+    def get_recent_alerts(
+        self, hours: int = 24, level: AlertLevel = None
+    ) -> List[Alert]:
         """获取最近的告警"""
         cutoff_time = datetime.now() - timedelta(hours=hours)
 
-        alerts = [
-            alert for alert in self.alerts
-            if alert.timestamp >= cutoff_time
-        ]
+        alerts = [alert for alert in self.alerts if alert.timestamp >= cutoff_time]
 
         if level:
             alerts = [alert for alert in alerts if alert.level == level]
@@ -148,7 +156,8 @@ class AlertManager:
         cutoff_time = datetime.now() - timedelta(hours=hours)
 
         return [
-            alert for alert in self.alerts
+            alert
+            for alert in self.alerts
             if alert.market == market and alert.timestamp >= cutoff_time
         ]
 
@@ -182,15 +191,15 @@ class AlertManager:
                 "critical": count_by_level(recent_24h, AlertLevel.CRITICAL),
                 "error": count_by_level(recent_24h, AlertLevel.ERROR),
                 "warning": count_by_level(recent_24h, AlertLevel.WARNING),
-                "info": count_by_level(recent_24h, AlertLevel.INFO)
+                "info": count_by_level(recent_24h, AlertLevel.INFO),
             },
             "last_1h": {
                 "total": len(recent_1h),
                 "critical": count_by_level(recent_1h, AlertLevel.CRITICAL),
                 "error": count_by_level(recent_1h, AlertLevel.ERROR),
                 "warning": count_by_level(recent_1h, AlertLevel.WARNING),
-                "info": count_by_level(recent_1h, AlertLevel.INFO)
-            }
+                "info": count_by_level(recent_1h, AlertLevel.INFO),
+            },
         }
 
     def clear_old_alerts(self, days: int = 7):
@@ -198,10 +207,7 @@ class AlertManager:
         cutoff_time = datetime.now() - timedelta(days=days)
         old_count = len(self.alerts)
 
-        self.alerts = [
-            alert for alert in self.alerts
-            if alert.timestamp >= cutoff_time
-        ]
+        self.alerts = [alert for alert in self.alerts if alert.timestamp >= cutoff_time]
 
         cleared_count = old_count - len(self.alerts)
         if cleared_count > 0:
@@ -221,9 +227,9 @@ class HealthMonitor:
         self.thresholds = {
             "success_rate_warning": 80.0,  # 成功率低于80%告警
             "success_rate_critical": 60.0,  # 成功率低于60%严重告警
-            "pool_size_warning": 10,        # 池大小低于10告警
+            "pool_size_warning": 10,  # 池大小低于10告警
             "proxy_lifetime_warning": 300,  # 代理生命周期低于5分钟告警
-            "api_failure_threshold": 5      # API连续失败5次告警
+            "api_failure_threshold": 5,  # API连续失败5次告警
         }
 
         self.api_failure_counts = {}
@@ -243,7 +249,7 @@ class HealthMonitor:
                         "Market Not Running",
                         f"Market {market} proxy pool is not running",
                         market,
-                        "HEALTH_CHECK"
+                        "HEALTH_CHECK",
                     )
                 )
                 return alerts
@@ -256,7 +262,7 @@ class HealthMonitor:
                         "Low Success Rate",
                         f"Market {market} success rate is critically low: {success_rate}%",
                         market,
-                        "HEALTH_CHECK"
+                        "HEALTH_CHECK",
                     )
                 )
             elif success_rate < self.thresholds["success_rate_warning"]:
@@ -265,7 +271,7 @@ class HealthMonitor:
                         "Low Success Rate",
                         f"Market {market} success rate is low: {success_rate}%",
                         market,
-                        "HEALTH_CHECK"
+                        "HEALTH_CHECK",
                     )
                 )
 
@@ -277,7 +283,7 @@ class HealthMonitor:
                         "Low Pool Size",
                         f"Market {market} pool size is low: {total_pool_size}",
                         market,
-                        "HEALTH_CHECK"
+                        "HEALTH_CHECK",
                     )
                 )
 
@@ -293,7 +299,7 @@ class HealthMonitor:
                             "High Failure Rate",
                             f"Market {market} failure rate is high: {failure_rate:.1f}%",
                             market,
-                            "HEALTH_CHECK"
+                            "HEALTH_CHECK",
                         )
                     )
 
@@ -303,7 +309,7 @@ class HealthMonitor:
                     "Health Check Failed",
                     f"Failed to check health for market {market}: {str(e)}",
                     market,
-                    "HEALTH_CHECK"
+                    "HEALTH_CHECK",
                 )
             )
 
@@ -321,7 +327,7 @@ class HealthMonitor:
                 "API Consecutive Failures",
                 f"API {api_name} failed {count} times consecutively for market {market}: {error}",
                 market,
-                "API"
+                "API",
             )
 
     def record_api_success(self, market: str, api_name: str):
@@ -335,5 +341,5 @@ class HealthMonitor:
         return {
             "thresholds": self.thresholds.copy(),
             "api_failure_counts": self.api_failure_counts.copy(),
-            "monitor_status": "running"
+            "monitor_status": "running",
         }

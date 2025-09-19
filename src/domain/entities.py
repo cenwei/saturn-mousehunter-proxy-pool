@@ -8,23 +8,25 @@ import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Protocol
+from typing import Optional, List, Protocol
 
 
 class MarketType(str, enum.Enum):
     """市场类型枚举"""
-    US = "us"
-    HK = "hk"
-    CN = "cn"
-    SG = "sg"
-    JP = "jp"
-    KR = "kr"
-    UK = "uk"
-    EU = "eu"
+
+    US = "US"
+    HK = "HK"
+    CN = "CN"
+    SG = "SG"
+    JP = "JP"
+    KR = "KR"
+    UK = "UK"
+    EU = "EU"
 
 
 class ProxyMode(str, enum.Enum):
     """代理池模式枚举"""
+
     LIVE = "live"
     TEST = "test"
     BACKTEST = "backtest"
@@ -32,6 +34,7 @@ class ProxyMode(str, enum.Enum):
 
 class ProxyStatus(str, enum.Enum):
     """代理状态枚举"""
+
     ACTIVE = "active"
     INACTIVE = "inactive"
     FAILED = "failed"
@@ -40,6 +43,7 @@ class ProxyStatus(str, enum.Enum):
 @dataclass
 class Proxy:
     """代理实体"""
+
     addr: str
     proxy_type: str = "short"
     status: ProxyStatus = ProxyStatus.ACTIVE
@@ -64,6 +68,7 @@ class Proxy:
 @dataclass
 class ProxyPoolStats:
     """代理池统计信息"""
+
     market: str
     mode: str
     pool_type: str

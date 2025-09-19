@@ -1,73 +1,43 @@
 #!/bin/bash
 
-# Saturn MouseHunter 代理池服务启动脚本
-# 支持多环境配置
+# 代理池微服务启动脚本
+# 在微服务目录内运行，不污染workspace
 
 set -e
 
-echo "🚀 启动 Saturn MouseHunter 代理池服务"
-echo "========================================"
+echo "🚀 代理池微服务"
+echo "================"
 
-# 默认配置
-DEFAULT_ENVIRONMENT="development"
-DEFAULT_MARKETS="cn,hk,us"  # 默认启动所有主要市场
+# 颜色定义
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-# 读取环境变量
-ENVIRONMENT=${ENVIRONMENT:-$DEFAULT_ENVIRONMENT}
-MARKETS=${MARKETS:-$DEFAULT_MARKETS}
-
-echo "环境: $ENVIRONMENT"
-echo "市场: $MARKETS (支持: cn=中国A股, hk=香港股市, us=美股)"
-
-# 根据环境显示配置信息
-case $ENVIRONMENT in
-    "development"|"dev")
-        echo "📍 开发环境配置:"
-        echo "   地址: 192.168.8.168:8005"
-        echo "   管理界面: http://192.168.8.168:8005"
-        echo "   API文档: http://192.168.8.168:8005/docs"
-        ;;
-    "testing"|"test")
-        echo "📍 测试环境配置:"
-        echo "   地址: test-proxy-pool:8005"
-        echo "   管理界面: http://test-proxy-pool:8005"
-        echo "   API文档: http://test-proxy-pool:8005/docs"
-        ;;
-    "production"|"prod")
-        echo "📍 生产环境配置:"
-        echo "   地址: proxy-pool.saturn-mousehunter.internal:8005"
-        echo "   管理界面: http://proxy-pool.saturn-mousehunter.internal:8005"
-        echo "   API文档: http://proxy-pool.saturn-mousehunter.internal:8005/docs"
-        ;;
-    *)
-        echo "⚠️  未知环境: $ENVIRONMENT，使用开发环境配置"
-        ENVIRONMENT="development"
-        ;;
-esac
-
-echo ""
-echo "🔧 启动参数:"
-echo "   ENVIRONMENT=$ENVIRONMENT"
-echo "   MARKETS=$MARKETS"
-
-# 检查依赖
-echo ""
-echo "🔍 检查依赖..."
-
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 未找到"
+# 检查是否在正确目录
+if [[ ! -f "src/main.py" ]]; then
+    echo -e "${RED}❌ 请在代理池微服务目录内运行此脚本${NC}"
+    echo "正确路径: saturn-mousehunter-proxy-pool/"
     exit 1
 fi
 
+# 检查uv
+if ! command -v uv &> /dev/null; then
+    echo -e "${RED}❌ uv 未安装${NC}"
+    exit 1
+fi
+
+# 设置默认环境变量
+export ENVIRONMENT=${ENVIRONMENT:-development}
+export MARKETS=${MARKETS:-cn,hk,us}
+export PORT=${PORT:-8005}
+
+echo -e "${YELLOW}配置信息:${NC}"
+echo "  环境: $ENVIRONMENT"
+echo "  市场: $MARKETS"
+echo "  端口: $PORT"
+echo "================"
+
 # 启动服务
-echo ""
-echo "🚀 启动服务..."
-
-cd "$(dirname "$0")"
-
-# 导出环境变量
-export ENVIRONMENT
-export MARKETS
-
-# 启动
-exec python3 src/main.py
+echo -e "${GREEN}启动代理池微服务...${NC}"
+uv run python start_service.py

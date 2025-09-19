@@ -11,6 +11,7 @@ from enum import Enum
 
 class ProxyPoolMode(Enum):
     """代理池模式"""
+
     LIVE = "live"
     BACKFILL = "backfill"
 
@@ -18,8 +19,9 @@ class ProxyPoolMode(Enum):
 @dataclass
 class ProxyPoolConfig:
     """代理池配置实体"""
+
     id: Optional[int] = None
-    market: str = "hk"
+    market: str = "HK"
     mode: ProxyPoolMode = ProxyPoolMode.LIVE
 
     # 海量代理配置
@@ -61,8 +63,9 @@ class ProxyPoolConfig:
 @dataclass
 class ProxyPoolStatus:
     """代理池运行状态实体"""
+
     id: Optional[int] = None
-    market: str = "hk"
+    market: str = "HK"
     mode: ProxyPoolMode = ProxyPoolMode.LIVE
 
     # 运行状态
@@ -72,7 +75,7 @@ class ProxyPoolStatus:
     last_rotation_at: Optional[datetime] = None
 
     # 统计信息
-    active_pool: str = 'A'
+    active_pool: str = "A"
     pool_a_size: int = 0
     pool_b_size: int = 0
     total_requests: int = 0
@@ -93,7 +96,9 @@ class ProxyPoolStatus:
 class IProxyPoolConfigRepository:
     """代理池配置仓储接口"""
 
-    async def get_config(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolConfig]:
+    async def get_config(
+        self, market: str, mode: ProxyPoolMode
+    ) -> Optional[ProxyPoolConfig]:
         """获取配置"""
         raise NotImplementedError
 
@@ -113,7 +118,9 @@ class IProxyPoolConfigRepository:
 class IProxyPoolStatusRepository:
     """代理池状态仓储接口"""
 
-    async def get_status(self, market: str, mode: ProxyPoolMode) -> Optional[ProxyPoolStatus]:
+    async def get_status(
+        self, market: str, mode: ProxyPoolMode
+    ) -> Optional[ProxyPoolStatus]:
         """获取状态"""
         raise NotImplementedError
 
@@ -125,12 +132,19 @@ class IProxyPoolStatusRepository:
         """更新状态"""
         raise NotImplementedError
 
-    async def update_pool_stats(self, market: str, mode: ProxyPoolMode,
-                               active_pool: str, pool_a_size: int, pool_b_size: int) -> bool:
+    async def update_pool_stats(
+        self,
+        market: str,
+        mode: ProxyPoolMode,
+        active_pool: str,
+        pool_a_size: int,
+        pool_b_size: int,
+    ) -> bool:
         """更新池统计信息"""
         raise NotImplementedError
 
-    async def increment_request_stats(self, market: str, mode: ProxyPoolMode,
-                                    success: bool) -> bool:
+    async def increment_request_stats(
+        self, market: str, mode: ProxyPoolMode, success: bool
+    ) -> bool:
         """增加请求统计"""
         raise NotImplementedError

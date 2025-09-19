@@ -1,240 +1,183 @@
 #!/usr/bin/env python3
 """
-代理池服务数据库初始化脚本
+数据库初始化脚本 - 代理池微服务
+
+创建PostgreSQL表结构，支持：
+- 代理池配置存储
+- 代理池状态追踪
+- 多市场多模式支持
 """
 
 import asyncio
-import sys
-import os
-from pathlib import Path
+import asyncpg
+from datetime import datetime
+from pydantic_settings import BaseSettings
 
-# 添加项目路径
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
-sys.path.insert(0, '/home/cenwei/workspace/saturn_mousehunter/saturn-mousehunter-shared/src')
 
-from saturn_mousehunter_shared import get_logger
-from saturn_mousehunter_shared.infra.database import get_db_connection
-from domain.config_entities import ProxyPoolConfig, ProxyPoolStatus, ProxyPoolMode
-from infrastructure.database_repositories import (
-    DatabaseProxyPoolConfigRepository,
-    DatabaseProxyPoolStatusRepository
-)
+class DatabaseSettings(BaseSettings):
+    """数据库连接配置"""
+    postgres_dsn: str = "postgresql://postgres:ChangeMe_StrongPwd!@192.168.8.188:30032/mh_central"
 
-log = get_logger("db_init")
+    class Config:
+        env_prefix = "DATABASE_"
+        extra = "ignore"
 
 
 async def create_tables():
     """创建数据库表"""
-    log.info("Creating database tables...")
+    settings = DatabaseSettings()
 
-    # 读取SQL文件
-    sql_file = project_root / "sql" / "proxy_pool_config.sql"
-
-    if not sql_file.exists():
-        log.error(f"SQL file not found: {sql_file}")
-        return False
+    print(f"Connecting to: {settings.postgres_dsn}")
 
     try:
-        with open(sql_file, 'r', encoding='utf-8') as f:
-            sql_content = f.read()
+        conn = await asyncpg.connect(settings.postgres_dsn)
 
-        # 分割SQL语句
-        statements = [stmt.strip() for stmt in sql_content.split(';') if stmt.strip()]
+        # 创建代理池配置表
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS proxy_pool_config (
+                id BIGSERIAL PRIMARY KEY,
+                market VARCHAR(10) NOT NULL,
+                mode VARCHAR(20) NOT NULL,
+                hailiang_api_url TEXT NOT NULL,
+                hailiang_enabled BOOLEAN DEFAULT TRUE,
+                batch_size INTEGER DEFAULT 400,
+                proxy_lifetime_minutes INTEGER DEFAULT 10,
+                rotation_interval_minutes INTEGER DEFAULT 7,
+                low_watermark INTEGER DEFAULT 50,
+                target_size INTEGER DEFAULT 200,
+                auto_start_enabled BOOLEAN DEFAULT TRUE,
+                pre_market_start_minutes INTEGER DEFAULT 2,
+                post_market_stop_minutes INTEGER DEFAULT 30,
+                backfill_enabled BOOLEAN DEFAULT FALSE,
+                backfill_duration_hours INTEGER DEFAULT 2,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
-        async with get_db_connection() as conn:
-            for statement in statements:
-                if statement:
-                    try:
-                        await conn.execute(statement)
-                        log.info(f"Executed SQL statement: {statement[:50]}...")
-                    except Exception as e:
-                        log.error(f"Error executing SQL: {e}")
-                        log.error(f"Statement: {statement}")
+                UNIQUE(market, mode)
+            );
+        """)
+        print("✅ 代理池配置表创建成功")
 
-        log.info("✅ Database tables created successfully")
-        return True
+        # 创建代理池状态表
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS proxy_pool_status (
+                id BIGSERIAL PRIMARY KEY,
+                market VARCHAR(10) NOT NULL,
+                mode VARCHAR(20) NOT NULL,
+                is_running BOOLEAN DEFAULT FALSE,
+                active_pool VARCHAR(1) DEFAULT 'A',
+                pool_a_size INTEGER DEFAULT 0,
+                pool_b_size INTEGER DEFAULT 0,
+                total_requests BIGINT DEFAULT 0,
+                success_count BIGINT DEFAULT 0,
+                failure_count BIGINT DEFAULT 0,
+                success_rate DECIMAL(5,2) DEFAULT 0.00,
+                last_rotation_time TIMESTAMP WITH TIME ZONE,
+                last_fetch_time TIMESTAMP WITH TIME ZONE,
+                api_failure_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
-    except Exception as e:
-        log.error(f"Error creating tables: {e}")
-        return False
+                UNIQUE(market, mode)
+            );
+        """)
+        print("✅ 代理池状态表创建成功")
 
+        # 创建索引
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_proxy_pool_config_market_mode
+            ON proxy_pool_config(market, mode);
+        """)
 
-async def init_default_configs():
-    """初始化默认配置"""
-    log.info("Initializing default configurations...")
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_proxy_pool_status_market_mode
+            ON proxy_pool_status(market, mode);
+        """)
 
-    try:
-        config_repo = DatabaseProxyPoolConfigRepository()
-        status_repo = DatabaseProxyPoolStatusRepository()
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_proxy_pool_status_running
+            ON proxy_pool_status(is_running);
+        """)
+        print("✅ 索引创建成功")
 
-        # 检查是否已有配置
-        existing_configs = await config_repo.get_all_active_configs()
-        if existing_configs:
-            log.info(f"Found {len(existing_configs)} existing configurations, skipping initialization")
-            return True
+        # 插入默认配置数据
+        markets_modes = [
+            ("hk", "live"),
+            ("hk", "backfill"),
+            ("cn", "live"),
+            ("cn", "backfill"),
+            ("us", "live"),
+            ("us", "backfill"),
+        ]
 
-        # 默认海量代理URL
-        default_url = "http://api.hailiangip.com:8422/api/getIp?type=1&num=400&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0"
+        for market, mode in markets_modes:
+            # 检查是否已存在
+            existing = await conn.fetchrow("""
+                SELECT id FROM proxy_pool_config WHERE market = $1 AND mode = $2
+            """, market, mode)
 
-        # 创建三个市场的默认配置
-        markets = ["cn", "hk", "us"]
+            if not existing:
+                # 插入默认配置
+                await conn.execute("""
+                    INSERT INTO proxy_pool_config (
+                        market, mode, hailiang_api_url, hailiang_enabled, batch_size,
+                        proxy_lifetime_minutes, rotation_interval_minutes, low_watermark,
+                        target_size, auto_start_enabled, pre_market_start_minutes,
+                        post_market_stop_minutes, backfill_enabled, backfill_duration_hours
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                    )
+                """,
+                    market, mode,
+                    "http://api.hailiangip.com:8422/api/getIp?type=1&num=20&pid=-1&unbindTime=600&cid=-1&orderId=O25062920421786879509&time=1751266950&sign=d758b85241594a8b751147b511b836bf&noDuplicate=1&dataType=0&lineSeparator=0",
+                    True, 400, 10, 7, 50, 200, True, 2, 30,
+                    mode == "backfill", 2 if mode == "backfill" else 0
+                )
 
-        for market in markets:
-            # Live模式配置
-            live_config = ProxyPoolConfig(
-                market=market,
-                mode=ProxyPoolMode.LIVE,
-                hailiang_api_url=default_url,
-                hailiang_enabled=True,
-                batch_size=400,
-                proxy_lifetime_minutes=10,
-                rotation_interval_minutes=7,
-                low_watermark=50,
-                target_size=200,
-                auto_start_enabled=True,
-                pre_market_start_minutes=2,  # 盘前2分钟启动
-                post_market_stop_minutes=30,
-                backfill_enabled=False,
-                backfill_duration_hours=2,
-                is_active=True
-            )
+                # 插入默认状态
+                await conn.execute("""
+                    INSERT INTO proxy_pool_status (
+                        market, mode, is_running, active_pool, pool_a_size, pool_b_size,
+                        total_requests, success_count, failure_count, success_rate
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+                    )
+                """, market, mode, False, 'A', 0, 0, 0, 0, 0, 0.0)
 
-            saved_config = await config_repo.save_config(live_config)
-            log.info(f"✅ Created live config for {market}: ID {saved_config.id}")
+                print(f"✅ 初始化 {market}/{mode} 配置和状态")
 
-            # Backfill模式配置
-            backfill_config = ProxyPoolConfig(
-                market=market,
-                mode=ProxyPoolMode.BACKFILL,
-                hailiang_api_url=default_url,
-                hailiang_enabled=True,
-                batch_size=400,
-                proxy_lifetime_minutes=10,
-                rotation_interval_minutes=7,
-                low_watermark=50,
-                target_size=200,
-                auto_start_enabled=False,  # backfill模式不自动启动
-                pre_market_start_minutes=0,
-                post_market_stop_minutes=0,
-                backfill_enabled=True,
-                backfill_duration_hours=2,
-                is_active=True
-            )
+        print("✅ 默认数据插入成功")
 
-            saved_backfill = await config_repo.save_config(backfill_config)
-            log.info(f"✅ Created backfill config for {market}: ID {saved_backfill.id}")
+        # 显示表信息
+        tables_info = await conn.fetch("""
+            SELECT table_name,
+                   (SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_name = t.table_name) as column_count
+            FROM information_schema.tables t
+            WHERE table_schema = 'public'
+            AND table_name LIKE 'proxy_pool%'
+            ORDER BY table_name;
+        """)
 
-            # 创建初始状态记录
-            live_status = ProxyPoolStatus(
-                market=market,
-                mode=ProxyPoolMode.LIVE,
-                is_running=False,
-                active_pool='A',
-                pool_a_size=0,
-                pool_b_size=0,
-                total_requests=0,
-                success_count=0,
-                failure_count=0,
-                success_rate=0.0
-            )
+        print("\n📊 数据库表信息:")
+        for table in tables_info:
+            print(f"  - {table['table_name']}: {table['column_count']} 列")
 
-            await status_repo.save_status(live_status)
-            log.info(f"✅ Created initial status for {market} live mode")
+        # 显示数据统计
+        config_count = await conn.fetchval("SELECT COUNT(*) FROM proxy_pool_config")
+        status_count = await conn.fetchval("SELECT COUNT(*) FROM proxy_pool_status")
 
-            backfill_status = ProxyPoolStatus(
-                market=market,
-                mode=ProxyPoolMode.BACKFILL,
-                is_running=False,
-                active_pool='A',
-                pool_a_size=0,
-                pool_b_size=0,
-                total_requests=0,
-                success_count=0,
-                failure_count=0,
-                success_rate=0.0
-            )
+        print(f"\n📈 数据统计:")
+        print(f"  - 配置记录: {config_count}")
+        print(f"  - 状态记录: {status_count}")
 
-            await status_repo.save_status(backfill_status)
-            log.info(f"✅ Created initial status for {market} backfill mode")
-
-        log.info("✅ Default configurations initialized successfully")
-        return True
-
-    except Exception as e:
-        log.error(f"Error initializing default configs: {e}")
-        return False
-
-
-async def verify_database():
-    """验证数据库设置"""
-    log.info("Verifying database setup...")
-
-    try:
-        config_repo = DatabaseProxyPoolConfigRepository()
-        status_repo = DatabaseProxyPoolStatusRepository()
-
-        # 测试配置表
-        configs = await config_repo.get_all_active_configs()
-        log.info(f"Found {len(configs)} active configurations:")
-
-        for config in configs:
-            log.info(f"  - {config.market}/{config.mode.value}: "
-                    f"auto_start={config.auto_start_enabled}, "
-                    f"pre_start={config.pre_market_start_minutes}min")
-
-        # 测试状态表
-        for config in configs:
-            status = await status_repo.get_status(config.market, config.mode)
-            if status:
-                log.info(f"  - Status {config.market}/{config.mode.value}: "
-                        f"running={status.is_running}")
-
-        log.info("✅ Database verification completed successfully")
-        return True
+        await conn.close()
+        print("\n🎉 数据库初始化完成!")
 
     except Exception as e:
-        log.error(f"Error verifying database: {e}")
-        return False
-
-
-async def main():
-    """主函数"""
-    print("🚀 Saturn MouseHunter 代理池数据库初始化")
-    print("=" * 60)
-
-    try:
-        # 1. 创建表
-        if not await create_tables():
-            print("❌ 表创建失败")
-            return 1
-
-        # 2. 初始化默认配置
-        if not await init_default_configs():
-            print("❌ 默认配置初始化失败")
-            return 1
-
-        # 3. 验证数据库
-        if not await verify_database():
-            print("❌ 数据库验证失败")
-            return 1
-
-        print("\n🎉 数据库初始化完成！")
-        print("\n📋 配置摘要:")
-        print("- 支持市场: CN, HK, US")
-        print("- 每个市场都有 live 和 backfill 两种模式")
-        print("- 盘前2分钟自动启动，盘后30分钟自动停止")
-        print("- 默认400个代理，10分钟生命周期，7分钟轮换")
-        print("\n🌐 访问管理界面: http://localhost:8080")
-
-        return 0
-
-    except Exception as e:
-        log.error(f"Initialization failed: {e}")
-        print(f"❌ 初始化失败: {e}")
-        return 1
+        print(f"❌ 数据库初始化失败: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    exit_code = asyncio.run(main())
-    sys.exit(exit_code)
+    asyncio.run(create_tables())

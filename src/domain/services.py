@@ -5,7 +5,7 @@ Domain层 - 代理池业务服务
 from __future__ import annotations
 
 from saturn_mousehunter_shared import get_logger, measure, retry
-from .entities import IProxyRepository, IMarketClock, MarketType, ProxyMode, Proxy, ProxyPoolStats
+from .entities import IProxyRepository, IMarketClock, MarketType, ProxyMode
 
 
 class ProxyPoolDomainService:
@@ -16,7 +16,7 @@ class ProxyPoolDomainService:
         proxy_repository: IProxyRepository,
         market_clock: IMarketClock,
         market: MarketType,
-        mode: ProxyMode
+        mode: ProxyMode,
     ):
         self.proxy_repository = proxy_repository
         self.market_clock = market_clock
@@ -53,7 +53,7 @@ class ProxyPoolDomainService:
             "market": self.market.value,
             "mode": self.mode.value,
             "market_status": market_status,
-            "stats": stats.__dict__ if stats else {}
+            "stats": stats.__dict__ if stats else {},
         }
 
     async def should_continue_running(self) -> bool:
@@ -63,13 +63,26 @@ class ProxyPoolDomainService:
 
         return not self.market_clock.should_terminate_after_close(self.market.value)
 
-    async def start_service(self) -> None:
-        """启动服务"""
-        if self.mode == ProxyMode.LIVE:
-            if self.market_clock.should_terminate_after_close(self.market.value):
-                raise RuntimeError(f"Market {self.market.value} closed past termination time")
+    async def start_service(self, force: bool = False) -> None:
+        """启动服务
 
-        self.logger.info(f"Starting proxy pool service for {self.market.value} in {self.mode.value} mode")
+        Args:
+            force: 是否强制启动，忽略市场时间检查
+                - True: 人工启动，忽略市场时间限制
+                - False: 自动启动，受市场时间限制（默认）
+        """
+        if self.mode == ProxyMode.LIVE and not force:
+            # 只有自动启动时才检查市场时间限制
+            # 人工启动（force=True）允许在市场关闭后启动
+            if self.market_clock.should_terminate_after_close(self.market.value):
+                raise RuntimeError(
+                    f"Market {self.market.value} closed past termination time"
+                )
+
+        self.logger.info(
+            f"Starting proxy pool service for {self.market.value} in {self.mode.value} mode"
+            + (" (forced)" if force else "")
+        )
         await self.proxy_repository.start_maintenance()
 
     async def stop_service(self) -> None:

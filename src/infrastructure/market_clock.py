@@ -8,10 +8,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from saturn_mousehunter_shared import get_logger
-from domain import IMarketClock
+from domain.entities import IMarketClock
 
 try:
     from zoneinfo import ZoneInfo
+
     HAS_ZONEINFO = True
 except ImportError:
     HAS_ZONEINFO = False
@@ -29,7 +30,7 @@ class MarketClockService(IMarketClock):
         "jp": "Asia/Tokyo",
         "kr": "Asia/Seoul",
         "uk": "Europe/London",
-        "eu": "Europe/Berlin"
+        "eu": "Europe/Berlin",
     }
 
     def __init__(self):
@@ -79,7 +80,9 @@ class MarketClockService(IMarketClock):
         else:
             return f"已收盘 ({hhmm})"
 
-    def should_terminate_after_close(self, market: str, t: Optional[datetime] = None) -> bool:
+    def should_terminate_after_close(
+        self, market: str, t: Optional[datetime] = None
+    ) -> bool:
         """判断是否应该在收盘后终止"""
         t = t or self.market_now(market)
         hhmm = t.strftime("%H:%M")
@@ -105,7 +108,9 @@ class MarketClockService(IMarketClock):
         # 目前简化为只排除周末
         return True
 
-    def get_market_trading_hours(self, market: str) -> Tuple[str, str, Optional[Tuple[str, str]]]:
+    def get_market_trading_hours(
+        self, market: str
+    ) -> Tuple[str, str, Optional[Tuple[str, str]]]:
         """
         获取市场交易时间
         返回: (开盘时间, 收盘时间, 午休时间段或None)
@@ -121,8 +126,9 @@ class MarketClockService(IMarketClock):
             # 其他市场默认24小时
             return ("00:00", "23:59", None)
 
-    def get_pre_market_start_time(self, market: str, pre_minutes: int = 30,
-                                 date: Optional[datetime] = None) -> Optional[datetime]:
+    def get_pre_market_start_time(
+        self, market: str, pre_minutes: int = 30, date: Optional[datetime] = None
+    ) -> Optional[datetime]:
         """获取盘前启动时间"""
         date = date or self.market_now(market)
 
@@ -134,7 +140,9 @@ class MarketClockService(IMarketClock):
 
         try:
             # 构建开盘时间
-            open_time = datetime.strptime(f"{date.strftime('%Y-%m-%d')} {start_time}", "%Y-%m-%d %H:%M")
+            open_time = datetime.strptime(
+                f"{date.strftime('%Y-%m-%d')} {start_time}", "%Y-%m-%d %H:%M"
+            )
             if HAS_ZONEINFO and market_tz:
                 open_time = open_time.replace(tzinfo=market_tz)
 
@@ -145,8 +153,9 @@ class MarketClockService(IMarketClock):
             self.logger.error(f"Error calculating pre-market start time: {e}")
             return None
 
-    def get_post_market_stop_time(self, market: str, post_minutes: int = 30,
-                                 date: Optional[datetime] = None) -> Optional[datetime]:
+    def get_post_market_stop_time(
+        self, market: str, post_minutes: int = 30, date: Optional[datetime] = None
+    ) -> Optional[datetime]:
         """获取盘后停止时间"""
         date = date or self.market_now(market)
 
@@ -158,7 +167,9 @@ class MarketClockService(IMarketClock):
 
         try:
             # 构建收盘时间
-            close_time = datetime.strptime(f"{date.strftime('%Y-%m-%d')} {end_time}", "%Y-%m-%d %H:%M")
+            close_time = datetime.strptime(
+                f"{date.strftime('%Y-%m-%d')} {end_time}", "%Y-%m-%d %H:%M"
+            )
             if HAS_ZONEINFO and market_tz:
                 close_time = close_time.replace(tzinfo=market_tz)
 
@@ -181,7 +192,7 @@ class MarketClockService(IMarketClock):
             return False
 
         # 移除时区信息进行比较（如果都有时区）
-        if hasattr(now, 'tzinfo') and hasattr(pre_start, 'tzinfo'):
+        if hasattr(now, "tzinfo") and hasattr(pre_start, "tzinfo"):
             return now >= pre_start
         else:
             # 简化比较，只比较时间部分
@@ -201,7 +212,7 @@ class MarketClockService(IMarketClock):
             return True
 
         # 移除时区信息进行比较（如果都有时区）
-        if hasattr(now, 'tzinfo') and hasattr(post_stop, 'tzinfo'):
+        if hasattr(now, "tzinfo") and hasattr(post_stop, "tzinfo"):
             return now >= post_stop
         else:
             # 简化比较，只比较时间部分
@@ -209,7 +220,9 @@ class MarketClockService(IMarketClock):
             post_time = post_stop.strftime("%H:%M")
             return now_time >= post_time
 
-    def get_next_trading_start_time(self, market: str, pre_minutes: int = 2) -> Optional[datetime]:
+    def get_next_trading_start_time(
+        self, market: str, pre_minutes: int = 2
+    ) -> Optional[datetime]:
         """获取下一个交易日的启动时间"""
         now = self.market_now(market)
         current_date = now.date()
@@ -226,23 +239,31 @@ class MarketClockService(IMarketClock):
             future_datetime = datetime.combine(future_date, now.time())
 
             if self.is_trading_day(market, future_datetime):
-                return self.get_pre_market_start_time(market, pre_minutes, future_datetime)
+                return self.get_pre_market_start_time(
+                    market, pre_minutes, future_datetime
+                )
 
         return None
 
-    def time_until_next_trading_session(self, market: str, pre_minutes: int = 2) -> Optional[timedelta]:
+    def time_until_next_trading_session(
+        self, market: str, pre_minutes: int = 2
+    ) -> Optional[timedelta]:
         """计算距离下一个交易时段的时间"""
         now = self.market_now(market)
         next_start = self.get_next_trading_start_time(market, pre_minutes)
 
         if next_start:
             # 移除时区信息进行计算
-            if hasattr(now, 'tzinfo') and hasattr(next_start, 'tzinfo'):
+            if hasattr(now, "tzinfo") and hasattr(next_start, "tzinfo"):
                 return next_start - now
             else:
                 # 简化计算
-                now_naive = now.replace(tzinfo=None) if hasattr(now, 'tzinfo') else now
-                next_naive = next_start.replace(tzinfo=None) if hasattr(next_start, 'tzinfo') else next_start
+                now_naive = now.replace(tzinfo=None) if hasattr(now, "tzinfo") else now
+                next_naive = (
+                    next_start.replace(tzinfo=None)
+                    if hasattr(next_start, "tzinfo")
+                    else next_start
+                )
                 return next_naive - now_naive
 
         return None
